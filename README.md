@@ -1,81 +1,130 @@
 # obsidian-mcp
 
-An MCP (Model Context Protocol) server for Obsidian vaults, speaking to the
-vault as plain markdown files on disk. **Built as a learning project**: the
-priority is understanding how MCP works internally, so the code deliberately
-uses the SDK's low-level `Server` class and comments explain the protocol at
-every step.
+**Let Claude (or any MCP client) read, search, edit, and reorganize your Obsidian vault — safely.**
 
-## What it does (v0.4)
+A [Model Context Protocol](https://modelcontextprotocol.io) server that treats your vault as what it really is: a folder of markdown files. No plugins, no cloud, no database. If Obsidian can be closed while Claude works on your notes, that's by design.
 
-- Speaks JSON-RPC over stdio (the transport Claude Desktop uses to spawn it)
-- Completes the `initialize` handshake and declares `tools` capability
-- Read: `vault_info`, `list_notes`, `read_note`, `search_notes`, `get_frontmatter`, `get_backlinks`
-- Write: `create_note` (no-clobber, optional YAML frontmatter), `edit_note` (append / prepend / find_replace / replace_section), `delete_note` (→ `.trash/`), `move_note` (repairs links vault-wide)
-- Safety: path-escape guard, kernel-atomic creates, reversible deletes, link-preserving moves
+Written **to learn how MCP works internally**, and commented like it: the code deliberately uses the SDK's low-level `Server` class so the actual JSON-RPC protocol stays visible. If you want to understand what an MCP server *is* — beyond `npx some-server` — read this source next to the [spec](https://modelcontextprotocol.io/specification).
 
-Full roadmap in [PLAN.md](PLAN.md).
+## What you can ask Claude
 
-## Run
+> *"How many notes are in my vault?"*
+> *"Find every note mentioning compound interest and summarize them."*
+> *"Create `Finanțe/glossary.md` with these terms, tagged `#finance`."*
+> *"Rename my daily note to `2026-09-07` — don't break any links."*
+> *"Which notes link to my reading list?"*
+
+## The 11 tools
+
+| Tool | What it does |
+| --- | --- |
+| `vault_info` | Vault path + note count — the "is it alive?" call |
+| `list_notes` | Browse folders, with sizes and modification dates |
+| `read_note` | Full markdown content of one note |
+| `search_notes` | Full-text search (case-insensitive substring or regex), with `path:line` references |
+| `get_frontmatter` | A note's YAML properties as JSON — cheaper than reading the whole note |
+| `create_note` | New note, parent folders auto-created, optional YAML frontmatter generated |
+| `edit_note` | Append, prepend (after frontmatter), find & replace, or replace a heading section |
+| `delete_note` | To `.trash/` — **never** a permanent delete |
+| `move_note` | Rename/move and **repair every link** across the vault |
+| `get_backlinks` | What references this note? (wikilinks, embeds, relative markdown links) |
+
+All read-only tools are annotated `readOnlyHint: true`, so MCP clients can skip approval prompts for them and only ask about writes.
+
+## Safety model
+
+Your vault is irreplaceable; the design starts there.
+
+- **No path escapes.** Every user-supplied path goes through one guard (`safeResolve`); `../../../etc/passwd` comes back as a contained error, never a read
+- **Deletes are reversible.** Notes move to the vault's `.trash/` (Obsidian's own convention) — never `rm`
+- **No silent clobbers.** `create_note` fails if the note exists, unless you explicitly say `overwrite`
+- **Kernel-atomic where possible.** Creates use the `wx` flag (no check-then-write race); deletes and moves are `rename()` calls
+- **Link-safe moves.** Moving a note rewrites inbound links in other notes *and* rebases the moved note's own relative links — aliases and `#anchors` preserved
+- **Empty-folder cleanup** after deletes/moves uses non-recursive `rmdir` up the tree: the kernel refuses anything non-empty, so cleanup is data-loss-proof by construction
+
+The one rule that makes this work: the vault folder is the **only** thing this server can touch.
+
+## Quick start
+
+Requires Node 20+.
 
 ```sh
-npm install
-npm run build
-OBSIDIAN_VAULT_PATH=/path/to/your/vault npm start
-```
-
-The process reads JSON-RPC on stdin and writes responses to stdout — that's
-the whole interface. For a human-friendly tour, install the
-[MCP Inspector](https://github.com/modelcontextprotocol/inspector):
-
-```sh
-npx @modelcontextprotocol/inspector node dist/index.js
+git clone https://github.com/laurentiudanielgi-coder/obsidian-mcp.git
+cd obsidian-mcp
+npm install && npm run build
 ```
 
 ### Claude Desktop
+
+Edit `claude_desktop_config.json` (`~/Library/Application Support/Claude/` on macOS):
 
 ```json
 {
   "mcpServers": {
     "obsidian": {
-      "command": "node",
+      "command": "/absolute/path/to/node",
       "args": ["/absolute/path/to/obsidian-mcp/dist/index.js"],
-      "env": { "OBSIDIAN_VAULT_PATH": "/Users/you/Obsidian/MyVault" }
+      "env": { "OBSIDIAN_VAULT_PATH": "/absolute/path/to/your/vault" }
     }
   }
 }
 ```
 
-## Development
+Notes: use `which node` for the absolute path — GUI apps don't inherit your shell's PATH. Fully quit and reopen Claude Desktop. In Obsidian, set *Files & Links → Deleted files → .trash folder* so trash semantics match. And back your vault up (git works beautifully) — safety features are seatbelts, not brakes.
 
-```sh
-npm test        # speaks raw JSON-RPC to the built server over a real pipe
-npm run dev     # tsc --watch
+### Any other MCP client
+
+The server is configured with one environment variable: `OBSIDIAN_VAULT_PATH`, pointing at the vault root. It speaks JSON-RPC over stdio — the default transport for locally-spawned MCP servers.
+
+## How it's built
+
+```
+src/
+├── index.ts   — entrypoint: transport wiring; why stdout is the protocol channel
+├── server.ts  — protocol layer: handshake, capabilities, tools/list, tools/call
+├── config.ts  — env-var config; why clients spawn servers and pass settings via env
+└── vault.ts   — the only code that touches files: path guard, trash, links, edits
 ```
 
-The integration tests in `test/server.test.ts` fork the built server and
-exchange newline-delimited JSON-RPC frames with it — the same bytes a real
-client sends. Reading that test is the fastest way to see the protocol.
+Architecture in one sentence: **JSON-RPC messages** arrive over a **transport** (stdio), get dispatched by the **protocol layer** to tool handlers, which delegate every filesystem operation to the **vault layer** — the single choke point where safety lives.
 
-## Key ideas the code teaches
+### For MCP learners
+
+The codebase doubles as a guided tour:
 
 | Concept | Where to look |
 | --- | --- |
-| Server config via env vars (clients spawn servers) | `src/config.ts` |
 | The `initialize` handshake + capabilities | `src/server.ts`, top comment |
-| Tool discovery: `tools/list` descriptions are for the model | `src/server.ts` |
+| Tool discovery: descriptions are written *for the model* | `src/server.ts` |
 | Tool errors vs protocol errors (two failure channels) | `src/server.ts`, `tools/call` handler |
-| Path-traversal guard when an LLM builds the paths | `src/vault.ts`, `safeResolve` |
-| Trash semantics (rename is atomic; `.trash` convention) | `src/vault.ts`, `deleteToTrash` |
-| Kernel-atomic create (the `wx` flag) vs exists?-then-write | `src/vault.ts`, `createNote` |
-| Respecting frontmatter during edits; self-correcting errors | `src/vault.ts`, `editNote` |
-| Obsidian link resolution (bare basename = only when unique) | `src/vault.ts`, `linkMatches` |
-| Why the basename index must reflect the *pre-move* world | `src/vault.ts`, `moveNote` |
-| Transports: stdio framing, stdout-is-protocol rule | `src/index.ts` |
-| Raw wire format | `test/server.test.ts` |
+| The traversal guard when an LLM builds the paths | `src/vault.ts`, `safeResolve` |
+| Obsidian link resolution & unique-basename rule | `src/vault.ts`, `linkMatches` |
+| Stdio framing and the stdout-is-protocol rule | `src/index.ts` |
+| Raw wire format | `test/server.test.ts` — speaks JSON-RPC to the real process |
+| Debugging "hung" tool calls | [DEBUGGING.md](DEBUGGING.md) — the triplet rule, from a real incident |
 
-## References
+### Development
 
-- [MCP specification](https://modelcontextprotocol.io/specification)
-- [TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
-- [Official filesystem reference server](https://github.com/modelcontextprotocol/servers) — ~80% of what this project will become, worth reading side by side
+```sh
+npm test          # 52 tests: unit (real temp filesystems) + wire-level (raw JSON-RPC)
+npm run dev       # tsc --watch
+```
+
+Two probe scripts exist for debugging clients against the server:
+
+```sh
+node scripts/big-create-test.mjs 9000        # create a 9,000-char note, time it
+node scripts/create-from-json.mjs note.json  # replay an exact client payload
+```
+
+### Roadmap
+
+- [x] CRUD, search, frontmatter, backlinks, link-repairing moves
+- [ ] RAG: heading-aware chunking → local embeddings → sqlite-vec → `semantic_search`
+- [ ] Streamable HTTP transport (same server, new transport — proving the decoupling)
+
+Full decision log and reasoning in [PLAN.md](PLAN.md).
+
+## License
+
+[MIT](LICENSE)
