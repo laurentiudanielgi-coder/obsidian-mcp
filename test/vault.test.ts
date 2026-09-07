@@ -6,7 +6,7 @@
  * here would test the mock.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtemp, writeFile, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Vault, VaultPathError } from "../src/vault.js";
@@ -290,6 +290,50 @@ describe("links: getBacklinks + moveNote", () => {
     await expect(vault.moveNote("b.md", "inbox.md")).rejects.toThrow(/already exists/);
     await expect(vault.moveNote("ghost.md", "x.md")).rejects.toThrow(/No such note/);
     await expect(vault.moveNote("../outside.md", "x.md")).rejects.toThrow(VaultPathError);
+  });
+});
+
+describe("empty-folder pruning", () => {
+  it("removes emptied ancestors after delete, stopping at non-empty ones", async () => {
+    await vault.createNote("deep/a/b/last.md", "content");
+    await vault.createNote("deep/keep.md", "stays");
+    await vault.deleteNote("deep/a/b/last.md");
+
+    // b and a emptied by the delete; deep survives (still holds keep.md)
+    const exists = async (p: string) =>
+      stat(path.join(root, p)).then(() => true).catch(() => false);
+    expect(await exists("deep/a/b")).toBe(false);
+    expect(await exists("deep/a")).toBe(false);
+    expect(await exists("deep")).toBe(true);
+    expect(await vault.readNote("deep/keep.md")).toBe("stays");
+  });
+
+  it("prunes the whole emptied chain but never the vault root", async () => {
+    await vault.createNote("chain/x/y/solo.md", "content");
+    await vault.deleteNote("chain/x/y/solo.md");
+    const exists = async (p: string) =>
+      stat(path.join(root, p)).then(() => true).catch(() => false);
+    expect(await exists("chain/x/y")).toBe(false);
+    expect(await exists("chain/x")).toBe(false);
+    expect(await exists("chain")).toBe(false);
+    expect(await exists(".")).toBe(true); // the vault root itself is untouchable
+  });
+
+  it("leaves folders that hold dotfiles (.DS_Store survival)", async () => {
+    await mkdir(path.join(root, "dotdir"), { recursive: true });
+    await writeFile(path.join(root, "dotdir", "n.md"), "x");
+    await writeFile(path.join(root, "dotdir", ".DS_Store"), "junk");
+    await vault.deleteNote("dotdir/n.md");
+    const exists = await stat(path.join(root, "dotdir")).then(() => true).catch(() => false);
+    expect(exists).toBe(true);
+  });
+
+  it("move_note prunes the emptied source folder", async () => {
+    await vault.createNote("olddir/wanderer.md", "content");
+    await vault.moveNote("olddir/wanderer.md", "newdir/wanderer.md");
+    const exists = await stat(path.join(root, "olddir")).then(() => true).catch(() => false);
+    expect(exists).toBe(false);
+    expect(await vault.readNote("newdir/wanderer.md")).toBe("content");
   });
 });
 

@@ -40,7 +40,7 @@ import { Vault, VaultPathError, type EditRequest } from "./vault.js";
  */
 export function createServer(config: Config): Server {
   const server = new Server(
-    { name: "obsidian-mcp", version: "0.4.1" },
+    { name: "obsidian-mcp", version: "0.4.2" },
     { capabilities: { tools: {} } },
   );
 
@@ -179,7 +179,8 @@ export function createServer(config: Config): Server {
           name: "delete_note",
           description:
             "Move a note to the vault's .trash folder. NEVER a permanent delete — " +
-            "the note can be restored from .trash. Folders are refused.",
+            "the note can be restored from .trash. Folders are refused, but " +
+            "folders left empty by the delete are removed automatically.",
           inputSchema: {
             type: "object" as const,
             properties: {
@@ -208,8 +209,8 @@ export function createServer(config: Config): Server {
           description:
             "Move or rename a note (folders created automatically) and automatically " +
             "update all links across the vault that pointed at its old location: " +
-            "wikilinks, embeds and relative markdown links. Prefer this over " +
-            "create+delete for renaming.",
+            "wikilinks, embeds and relative markdown links. Emptied source " +
+            "folders are pruned. Prefer this over create+delete for renaming.",
           inputSchema: {
             type: "object" as const,
             properties: {

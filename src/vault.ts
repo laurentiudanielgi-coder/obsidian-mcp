@@ -9,7 +9,7 @@
  * operation therefore goes through `safeResolve()`, which is the only code
  * allowed to turn a user string into an absolute path.
  */
-import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rmdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import matter from "gray-matter";
 
@@ -408,6 +408,10 @@ export class Vault {
     }
     await mkdir(path.dirname(toAbs), { recursive: true });
     await rename(fromAbs, toAbs);
+    // Moving out of a folder empties it just like deleting does. If source
+    // and destination share a parent, the prune attempt fails harmlessly
+    // (the parent still contains the moved file).
+    await this.pruneEmptyDirs(fromAbs);
 
     const files = await this.collectMarkdown(".");
     // Basename uniqueness must be judged in the PRE-move world: bare [[old]]
@@ -548,7 +552,31 @@ export class Vault {
     }
 
     await rename(abs, target);
+    await this.pruneEmptyDirs(abs);
     return path.relative(this.root, target);
+  }
+
+  /**
+   * LEARNING NOTE — empty-folder cleanup, where the safety is free:
+   * Deleting or moving the last note out of a folder would leave husks
+   * behind. `rmdir` (the non-recursive one!) refuses to delete anything but
+   * a provably empty directory — the KERNEL guarantees no data loss, so we
+   * can call it blindly up the ancestor chain and stop at the first refusal
+   * (a folder still containing notes, or holding dotfiles like .DS_Store).
+   * Never use `rm({ recursive: true })` for this; it is the sharp tool this
+   * little walk exists to avoid.
+   */
+  private async pruneEmptyDirs(startFile: string): Promise<void> {
+    const root = this.safeResolve(".");
+    let dir = path.dirname(startFile);
+    while (dir !== root && dir.startsWith(root)) {
+      try {
+        await rmdir(dir);
+      } catch {
+        return; // not empty (or not ours to remove) — done, by design
+      }
+      dir = path.dirname(dir);
+    }
   }
 
   private async walk(dir: string, notes: NoteInfo[]): Promise<void> {
