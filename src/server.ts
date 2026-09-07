@@ -234,6 +234,11 @@ export function createServer(config: Config): Server {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
+    // stderr-only observability: when a client hangs, this line is how we
+    // know whether the request ever REACHED us. Check the caller's MCP log
+    // (e.g. ~/Library/Logs/Claude/mcp*.log) for it.
+    console.error(`[obsidian-mcp] tools/call ${name}`);
+
     try {
       switch (name) {
         case "vault_info": {
