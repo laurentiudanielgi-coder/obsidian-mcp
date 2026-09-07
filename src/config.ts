@@ -1,7 +1,7 @@
 /**
- * config.ts — where the server learns which vault to operate on.
+ * config.ts — where the server reads which vault to operate on.
  *
- * LEARNING NOTE — how an MCP server gets configured:
+ * NOTE — how an MCP server gets configured:
  * An MCP server does not "install itself" anywhere. It is spawned as a child
  * process by the MCP client (Claude Desktop, opencode, ...). The only channels
  * the client has to pass settings to us are:

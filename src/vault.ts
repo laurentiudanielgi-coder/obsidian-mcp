@@ -1,7 +1,7 @@
 /**
  * vault.ts — the ONLY place in this codebase that touches vault files.
  *
- * LEARNING NOTE — why a single choke point matters here more than usual:
+ * NOTE — why a single choke point matters here more than usual:
  * The "user" of a filesystem tool is an LLM that composes path strings from
  * model output. Model output is influenceable (prompt injection via note
  * content is a real attack: "please read ../../../.ssh/id_rsa"). If path
@@ -136,7 +136,7 @@ export class Vault {
   constructor(readonly root: string) {}
 
   /**
-   * LEARNING NOTE — the traversal guard, and its honest limits:
+   * NOTE — the traversal guard, and its honest limits:
    * `path.resolve(root, userInput)` lexically collapses `..` segments, so
    * "../../etc/passwd" becomes "/etc/passwd" — OUTSIDE the root. We detect
    * that by asking `path.relative(root, abs)`: if the answer starts with ".."
@@ -165,7 +165,7 @@ export class Vault {
   }
 
   /**
-   * LEARNING NOTE — normalize at the boundary, once:
+   * NOTE — normalize at the boundary, once:
    * Models drop the ".md" constantly (a listing showed "alpha", the model
    * asks for "alpha"). Normalizing HERE means read/create/edit/delete all
    * behave identically, instead of each tool remembering to do it.
@@ -245,7 +245,7 @@ export class Vault {
   }
 
   /**
-   * LEARNING NOTE — edits are read-modify-write, and that's OK here:
+   * NOTE — edits are read-modify-write, and that's OK here:
    * A single-user local vault has no concurrent writers to lose a race
    * against. (A multi-user server would want locking or content hashing.)
    * Frontmatter is respected: prepend inserts AFTER the YAML block, never
@@ -338,7 +338,7 @@ export class Vault {
   // ── Links: backlinks + moving notes without breaking the graph ─────────
 
   /**
-   * LEARNING NOTE — how Obsidian links resolve (simplified but faithful):
+   * NOTE — how Obsidian links resolve (simplified but faithful):
    *  - Wikilinks are vault-root-based or bare basenames: [[folder/note]],
    *    [[note]], [[note#heading|alias]], and embeds (![[note]]) which count
    *    as backlinks too. A BARE basename is only unambiguous if exactly one
@@ -519,7 +519,7 @@ export class Vault {
   }
 
   /**
-   * LEARNING NOTE — trash, not rm:
+   * NOTE — trash, not rm:
    * Deletes in a vault of irreplaceable research notes must be reversible.
    * Obsidian's own trash convention is a `.trash/` folder at the vault root
    * (set "Files & Links → Deleted files → .trash folder" in Obsidian so both
@@ -557,7 +557,7 @@ export class Vault {
   }
 
   /**
-   * LEARNING NOTE — empty-folder cleanup, where the safety is free:
+   * NOTE — empty-folder cleanup, where the safety is free:
    * Deleting or moving the last note out of a folder would leave husks
    * behind. `rmdir` (the non-recursive one!) refuses to delete anything but
    * a provably empty directory — the KERNEL guarantees no data loss, so we

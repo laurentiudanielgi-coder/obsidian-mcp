@@ -1,7 +1,7 @@
 # obsidian-mcp — Plan
 
-Personal Obsidian vault MCP server. **Priority: learning MCP internals.**
-Everything else (features, polish) is secondary.
+MCP server for Obsidian vaults. Design priority: correctness and safety of
+vault operations; the implementation stays explicit and documented.
 
 ## Decisions made
 
@@ -22,13 +22,6 @@ Everything else (features, polish) is secondary.
 3. ✅ Read tools: `read_note`, `list_notes`, `search_notes`, `get_frontmatter` (v0.3)
 4. ✅ Write tools: `create_note` (wx-flag no-clobber, YAML generation), `edit_note` (append / prepend-after-frontmatter / find_replace / replace_section), `delete_note` (→ .trash)
 5. ✅ Link tools: `get_backlinks` (wikilinks/embeds/relative-md, unique-basename rule), `move_note` with automatic link repair across the vault
-6. Wire into Claude Desktop, end-to-end use on the Mac
+6. Wire into Claude Desktop, end-to-end use
 7. (Phase 2) RAG: heading-aware chunking → embeddings (Ollama local vs API, decide then) → sqlite-vec or LanceDB → chokidar incremental index → `semantic_search`
 8. (Stretch) Swap stdio transport for Streamable HTTP — proves transport/protocol decoupling
-
-## Learning thread (keep answering as we go)
-
-- What exactly travels on the wire at each step? (`test/server.test.ts`)
-- Why does the spec separate protocol errors from tool results?
-- What do capabilities buy the client? (Add `resources` in milestone 3 to see.)
-- What changes when the transport changes? (Milestone 8)

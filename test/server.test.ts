@@ -1,10 +1,10 @@
 /**
  * server.test.ts — talks raw JSON-RPC to the built server, like a client would.
  *
- * LEARNING NOTE — why this test spawns a real process instead of importing
+ * NOTE — why this test spawns a real process instead of importing
  * `createServer()` and calling handlers directly:
  * Handler-level tests would verify our logic but skip the part we most want
- * to learn: the WIRE. Here we fork `dist/index.js`, write newline-delimited
+ * to verify: the WIRE. Here we fork `dist/index.js`, write newline-delimited
  * JSON-RPC into its stdin, and parse its stdout — exactly what Claude Desktop
  * does. If the framing, the handshake, or the response shapes are wrong, this
  * test catches it.
@@ -75,7 +75,7 @@ describe("MCP handshake and tools", () => {
     const { promise } = request("initialize", {
       protocolVersion: "2025-06-18", // the spec revision this SDK targets
       capabilities: {}, // client declares ITS features; empty is valid
-      clientInfo: { name: "learning-test", version: "0.0.0" },
+      clientInfo: { name: "wire-test", version: "0.0.0" },
     });
     const res = await promise;
 

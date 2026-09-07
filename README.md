@@ -102,7 +102,6 @@ The codebase doubles as a guided tour:
 | Obsidian link resolution & unique-basename rule | `src/vault.ts`, `linkMatches` |
 | Stdio framing and the stdout-is-protocol rule | `src/index.ts` |
 | Raw wire format | `test/server.test.ts` — speaks JSON-RPC to the real process |
-| Debugging "hung" tool calls | [DEBUGGING.md](DEBUGGING.md) — the triplet rule, from a real incident |
 
 ### Development
 

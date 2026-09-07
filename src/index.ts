@@ -2,7 +2,7 @@
 /**
  * index.ts — entrypoint: wire config + protocol to a transport, and run.
  *
- * LEARNING NOTE — what a transport is:
+ * NOTE — what a transport is:
  * The protocol layer (server.ts) deals in JSON-RPC messages. A transport is
  * the dumb pipe that carries those messages. The SDK decouples them, so the
  * SAME server code runs over:

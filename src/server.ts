@@ -1,14 +1,14 @@
 /**
  * server.ts — the MCP protocol layer.
  *
- * LEARNING NOTE — why the *low-level* `Server` class:
+ * NOTE — why the *low-level* `Server` class:
  * The SDK ships two layers:
  *   - `McpServer` (high-level): register tools with one call, schemas handled
  *     for you. Convenient, but the protocol becomes invisible.
  *   - `Server` (low-level): YOU register a handler per JSON-RPC method, keyed
  *     by the exact method name from the spec ("tools/list", "tools/call").
- * We use the low-level one on purpose: this project exists to learn how MCP
- * actually works, and here every protocol concept is visible in code.
+ * We use the low-level one on purpose: every protocol concept
+ * stays visible in code.
  */
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
@@ -19,7 +19,7 @@ import type { Config } from "./config.js";
 import { Vault, VaultPathError, type EditRequest } from "./vault.js";
 
 /**
- * LEARNING NOTE — the MCP lifecycle (what happens before any tool runs):
+ * NOTE — the MCP lifecycle (what happens before any tool runs):
  *
  *   client                                server (us)
  *     │  1. initialize request              │
@@ -49,7 +49,7 @@ export function createServer(config: Config): Server {
   const vault = new Vault(config.vaultPath);
 
   /**
-   * LEARNING NOTE — "tools/list" is metadata, not execution:
+   * NOTE — "tools/list" is metadata, not execution:
    * The client asks once "which tools do you have?" and caches the answer.
    * Each tool needs:
    *   name        — stable identifier the model will call
@@ -225,7 +225,7 @@ export function createServer(config: Config): Server {
   });
 
   /**
-   * LEARNING NOTE — "tools/call" is where the model's request lands:
+   * NOTE — "tools/call" is where the model's request lands:
    * Two DIFFERENT failure channels, a distinction the spec is strict about:
    *   1. Protocol error  → throw / reject. The SDK turns it into a JSON-RPC
    *      error response (id matches request, no `result` field). Reserved for
