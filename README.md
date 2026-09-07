@@ -13,6 +13,7 @@ Written **to learn how MCP works internally**, and commented like it: the code d
 > *"Create `research/glossary.md` with these ten terms and tag it `#glossary`."*
 > *"Rename `daily/2026-09-06.md` to `journal/2026-09-06.md` — don't break any links."*
 > *"Which notes link to my reading list? Show the exact lines."*
+> *"Research solid-state batteries on the web, then create `research/solid-state-batteries.md` — summary, key players, open questions, and frontmatter with the sources."*
 
 ## The 11 tools
 
