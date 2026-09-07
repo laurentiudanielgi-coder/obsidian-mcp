@@ -40,7 +40,7 @@ import { Vault, VaultPathError, type EditRequest } from "./vault.js";
  */
 export function createServer(config: Config): Server {
   const server = new Server(
-    { name: "obsidian-mcp", version: "0.4.0" },
+    { name: "obsidian-mcp", version: "0.4.1" },
     { capabilities: { tools: {} } },
   );
 
@@ -64,6 +64,7 @@ export function createServer(config: Config): Server {
       tools: [
         {
           name: "vault_info",
+          annotations: { readOnlyHint: true },
           description:
             "Report the vault root path and how many markdown notes it contains. " +
             "Use this first to confirm the vault is mounted and readable.",
@@ -71,6 +72,7 @@ export function createServer(config: Config): Server {
         },
         {
           name: "list_notes",
+          annotations: { readOnlyHint: true },
           description:
             "List markdown notes in the vault (or a subfolder), newest info included. " +
             "Returns vault-relative paths — use those in read_note.",
@@ -87,6 +89,7 @@ export function createServer(config: Config): Server {
         },
         {
           name: "read_note",
+          annotations: { readOnlyHint: true },
           description:
             "Read the full markdown content of one note. `path` is vault-relative " +
             "(from list_notes), e.g. 'projects/alpha.md'. The .md suffix is optional.",
@@ -100,6 +103,7 @@ export function createServer(config: Config): Server {
         },
         {
           name: "search_notes",
+          annotations: { readOnlyHint: true },
           description:
             "Full-text search across all notes. Default is case-insensitive substring " +
             "matching; set regex=true to treat query as a regular expression. " +
@@ -116,6 +120,7 @@ export function createServer(config: Config): Server {
         },
         {
           name: "get_frontmatter",
+          annotations: { readOnlyHint: true },
           description:
             "Read a note's YAML frontmatter (its properties: tags, dates, custom " +
             "fields) as JSON. Cheaper than read_note when you only need metadata.",
@@ -185,6 +190,7 @@ export function createServer(config: Config): Server {
         },
         {
           name: "get_backlinks",
+          annotations: { readOnlyHint: true },
           description:
             "List notes that link TO a given note (wikilinks, embeds and relative " +
             "markdown links). Use before editing or deleting to understand what " +
