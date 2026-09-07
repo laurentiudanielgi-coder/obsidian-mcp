@@ -4,7 +4,7 @@
       "command": "node",
       "args": ["dist/index.js"],
       "env": {
-        "OBSIDIAN_VAULT_PATH": "/Users/laurica/Documents/stuff"
+        "OBSIDIAN_VAULT_PATH": "/Users/YOU/PATH/TO/YourVault"
       }
     }
   }
