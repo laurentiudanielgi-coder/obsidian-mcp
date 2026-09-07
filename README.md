@@ -4,7 +4,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server that treats your vault as what it really is: a folder of markdown files. No plugins, no cloud, no database. Obsidian can be closed while Claude works on your notes.
 
-The implementation is deliberately explicit: it uses the SDK's low-level `Server` class rather than the high-level helpers, so the protocol itself — handshake, capabilities, tool discovery, the two failure channels — stays visible in the source. If you want to understand what an MCP server actually is beyond `npx some-server`, read this code next to the [specification](https://modelcontextprotocol.io/specification).
+The implementation follows the SDK's current recommended API (`McpServer` + zod-validated tool contracts) — and pins its protocol behavior with integration tests that speak **raw JSON-RPC to the real process**, so SDK upgrades can't silently change the wire. If you want to understand what an MCP server actually does beyond `npx some-server`, start with [test/server.test.ts](test/server.test.ts) next to the [specification](https://modelcontextprotocol.io/specification).
 
 ## What you can ask Claude
 
@@ -95,12 +95,13 @@ The codebase doubles as a guided tour:
 
 | Concept | Where to look |
 | --- | --- |
-| The `initialize` handshake + capabilities | `src/server.ts`, top comment |
-| Tool discovery: descriptions are written *for the model* | `src/server.ts` |
-| Tool errors vs protocol errors (two failure channels) | `src/server.ts`, `tools/call` handler |
+| The `initialize` handshake, capabilities, wire frames | `test/server.test.ts` |
+| Tool contracts: descriptions are written *for the model*; zod schemas | `src/server.ts` |
+| Tool errors vs protocol errors (two failure channels) | `src/server.ts`, the `guarded` wrapper |
+| Server config via env vars (clients spawn servers) | `src/config.ts` |
+| Stdio framing and the stdout-is-protocol rule | `src/index.ts` |
 | The traversal guard when an LLM builds the paths | `src/vault.ts`, `safeResolve` |
 | Obsidian link resolution & unique-basename rule | `src/vault.ts`, `linkMatches` |
-| Stdio framing and the stdout-is-protocol rule | `src/index.ts` |
 | Raw wire format | `test/server.test.ts` — speaks JSON-RPC to the real process |
 
 ### Development

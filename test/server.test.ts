@@ -249,13 +249,17 @@ describe("MCP handshake and tools", () => {
     expect((await read.promise).result.content[0].text).toContain("[[target-renamed]]");
   });
 
-  it("rejects unknown tools as a protocol error", async () => {
+  it("reports unknown tools as isError results (McpServer behavior)", async () => {
     const { promise } = request("tools/call", { name: "does_not_exist", arguments: {} });
     const res = await promise;
 
-    // Protocol error: response carries `error`, NOT `result`. Contrast with
-    // how a *failed* vault_info would look (result.isError = true).
-    expect(res.error).toBeDefined();
-    expect(res.result).toBeUndefined();
+    // Behavioral note: the deprecated low-level `Server` returned unknown
+    // tools as a JSON-RPC protocol error (`error`, no `result`). The
+    // recommended `McpServer` normalizes them into isError tool results so
+    // the model can read the message and react. Same wire method, different
+    // envelope semantics — one of the changes the wire tests pin.
+    expect(res.error).toBeUndefined();
+    expect(res.result.isError).toBe(true);
+    expect(res.result.content[0].text).toMatch(/not found/);
   });
 });

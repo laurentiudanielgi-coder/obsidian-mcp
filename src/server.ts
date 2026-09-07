@@ -1,385 +1,286 @@
 /**
  * server.ts — the MCP protocol layer.
  *
- * NOTE — why the *low-level* `Server` class:
- * The SDK ships two layers:
- *   - `McpServer` (high-level): register tools with one call, schemas handled
- *     for you. Convenient, but the protocol becomes invisible.
- *   - `Server` (low-level): YOU register a handler per JSON-RPC method, keyed
- *     by the exact method name from the spec ("tools/list", "tools/call").
- * We use the low-level one on purpose: every protocol concept
- * stays visible in code.
+ * NOTE — which SDK layer, and why:
+ * The SDK ships two layers. The low-level `Server` class (handlers per
+ * JSON-RPC method, written by hand) is deprecated as of SDK 1.30 in favor of
+ * `McpServer` + `registerTool`. We follow the recommendation — but the
+ * protocol itself does not move: `McpServer` is a convenience wrapper that
+ * still speaks the exact same JSON-RPC over the same transport. Our
+ * integration tests (test/server.test.ts) speak RAW JSON-RPC to the built
+ * process, so any SDK refactor that changes the wire fails the suite. Tool
+ * behavior and error semantics stay pinned there, not in this file.
  */
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import type { Config } from "./config.js";
-import { Vault, VaultPathError, type EditRequest } from "./vault.js";
+import { Vault, type EditRequest } from "./vault.js";
 
-/**
- * NOTE — the MCP lifecycle (what happens before any tool runs):
- *
- *   client                                server (us)
- *     │  1. initialize request              │
- *     │ ───────────────────────────────────▶│  we reply with: our name/version,
- *     │  2. ◀───────────────────────────────│  the protocolVersion we share
- *     │                                     │  with the client, and our
- *     │                                     │  *capabilities* (what we can do).
- *     │  3. notification: initialized       │
- *     │ ───────────────────────────────────▶│  (no reply — notifications
- *     │                                     │   never get responses)
- *     │  4. tools/list, tools/call, ...     │
- *     │ ◀──────────────────────────────────▶│  normal request/response work
- *
- * `capabilities` is the server telling the client, up front, which optional
- * protocol features it implements (tools? resources? prompts? logging?). The
- * client uses this to decide what UI to offer and which requests are legal to
- * send. We only declare `tools` for now; resources come in a later milestone.
- */
-export function createServer(config: Config): Server {
-  const server = new Server(
-    { name: "obsidian-mcp", version: "0.4.2" },
-    { capabilities: { tools: {} } },
-  );
-
-  // The fs layer from milestone 2. Every tool below goes through it — no
-  // handler touches a path directly.
+export function createServer(config: Config): McpServer {
+  // The fs layer. Every tool below goes through it — no handler touches a
+  // path directly.
   const vault = new Vault(config.vaultPath);
 
-  /**
-   * NOTE — "tools/list" is metadata, not execution:
-   * The client asks once "which tools do you have?" and caches the answer.
-   * Each tool needs:
-   *   name        — stable identifier the model will call
-   *   description — WRITTEN FOR THE MODEL, not for humans. This is the only
-   *                 thing the LLM sees when deciding which tool to use and
-   *                 with which arguments. Vague descriptions cause wrong calls.
-   *   inputSchema — JSON Schema for the arguments. The client validates (and
-   *                 the model generates) arguments against it.
-   */
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return {
-      tools: [
-        {
-          name: "vault_info",
-          annotations: { readOnlyHint: true },
-          description:
-            "Report the vault root path and how many markdown notes it contains. " +
-            "Use this first to confirm the vault is mounted and readable.",
-          inputSchema: { type: "object" as const, properties: {}, required: [] },
-        },
-        {
-          name: "list_notes",
-          annotations: { readOnlyHint: true },
-          description:
-            "List markdown notes in the vault (or a subfolder), newest info included. " +
-            "Returns vault-relative paths — use those in read_note.",
-          inputSchema: {
-            type: "object" as const,
-            properties: {
-              folder: {
-                type: "string",
-                description: "Optional subfolder to list, vault-relative (e.g. 'projects'). Defaults to the whole vault.",
-              },
-            },
-            required: [],
-          },
-        },
-        {
-          name: "read_note",
-          annotations: { readOnlyHint: true },
-          description:
-            "Read the full markdown content of one note. `path` is vault-relative " +
-            "(from list_notes), e.g. 'projects/alpha.md'. The .md suffix is optional.",
-          inputSchema: {
-            type: "object" as const,
-            properties: {
-              path: { type: "string", description: "Vault-relative note path" },
-            },
-            required: ["path"],
-          },
-        },
-        {
-          name: "search_notes",
-          annotations: { readOnlyHint: true },
-          description:
-            "Full-text search across all notes. Default is case-insensitive substring " +
-            "matching; set regex=true to treat query as a regular expression. " +
-            "Returns path, line number and the matching line, capped at 50 hits.",
-          inputSchema: {
-            type: "object" as const,
-            properties: {
-              query: { type: "string", description: "Text to search for" },
-              regex: { type: "boolean", description: "Treat query as a regular expression" },
-              folder: { type: "string", description: "Optional subfolder to restrict the search" },
-            },
-            required: ["query"],
-          },
-        },
-        {
-          name: "get_frontmatter",
-          annotations: { readOnlyHint: true },
-          description:
-            "Read a note's YAML frontmatter (its properties: tags, dates, custom " +
-            "fields) as JSON. Cheaper than read_note when you only need metadata.",
-          inputSchema: {
-            type: "object" as const,
-            properties: {
-              path: { type: "string", description: "Vault-relative note path" },
-            },
-            required: ["path"],
-          },
-        },
-        {
-          name: "create_note",
-          description:
-            "Create a new note. Fails if it already exists unless overwrite=true. " +
-            "Parent folders are created automatically. Pass `frontmatter` to have " +
-            "YAML properties generated; `content` is the markdown body.",
-          inputSchema: {
-            type: "object" as const,
-            properties: {
-              path: { type: "string", description: "Vault-relative note path (.md optional)" },
-              content: { type: "string", description: "Markdown body of the note" },
-              frontmatter: {
-                type: "object",
-                description: "Optional YAML properties, e.g. {\"tags\": [\"research\"]}",
-              },
-              overwrite: { type: "boolean", description: "Replace an existing note" },
-            },
-            required: ["path", "content"],
-          },
-        },
-        {
-          name: "edit_note",
-          description:
-            "Edit an existing note in place. Modes: 'append'/'prepend' content " +
-            "(prepend lands after frontmatter); 'find_replace' all occurrences of " +
-            "find→replace (fails if find is absent); 'replace_section' swaps " +
-            "everything under `heading` (subsections included) for `content`.",
-          inputSchema: {
-            type: "object" as const,
-            properties: {
-              path: { type: "string", description: "Vault-relative note path" },
-              mode: {
-                type: "string",
-                enum: ["append", "prepend", "find_replace", "replace_section"],
-              },
-              content: { type: "string", description: "Text for append/prepend/replace_section" },
-              find: { type: "string", description: "Text to find (find_replace)" },
-              replace: { type: "string", description: "Replacement text (find_replace)" },
-              heading: { type: "string", description: "Exact heading text (replace_section)" },
-            },
-            required: ["path", "mode"],
-          },
-        },
-        {
-          name: "delete_note",
-          description:
-            "Move a note to the vault's .trash folder. NEVER a permanent delete — " +
-            "the note can be restored from .trash. Folders are refused, but " +
-            "folders left empty by the delete are removed automatically.",
-          inputSchema: {
-            type: "object" as const,
-            properties: {
-              path: { type: "string", description: "Vault-relative note path" },
-            },
-            required: ["path"],
-          },
-        },
-        {
-          name: "get_backlinks",
-          annotations: { readOnlyHint: true },
-          description:
-            "List notes that link TO a given note (wikilinks, embeds and relative " +
-            "markdown links). Use before editing or deleting to understand what " +
-            "references it, or to follow the knowledge graph backwards.",
-          inputSchema: {
-            type: "object" as const,
-            properties: {
-              path: { type: "string", description: "Vault-relative note path" },
-            },
-            required: ["path"],
-          },
-        },
-        {
-          name: "move_note",
-          description:
-            "Move or rename a note (folders created automatically) and automatically " +
-            "update all links across the vault that pointed at its old location: " +
-            "wikilinks, embeds and relative markdown links. Emptied source " +
-            "folders are pruned. Prefer this over create+delete for renaming.",
-          inputSchema: {
-            type: "object" as const,
-            properties: {
-              from_path: { type: "string", description: "Current vault-relative path" },
-              to_path: { type: "string", description: "New vault-relative path" },
-            },
-            required: ["from_path", "to_path"],
-          },
-        },
-      ],
-    };
-  });
+  const server = new McpServer({ name: "obsidian-mcp", version: "0.5.0" });
 
   /**
-   * NOTE — "tools/call" is where the model's request lands:
-   * Two DIFFERENT failure channels, a distinction the spec is strict about:
-   *   1. Protocol error  → throw / reject. The SDK turns it into a JSON-RPC
-   *      error response (id matches request, no `result` field). Reserved for
-   *      "you spoke the protocol wrong" — unknown tool, malformed envelope.
-   *   2. Tool result with `isError: true` → a NORMAL response whose payload
-   *      says the operation failed. This is how "file not found" is reported:
-   *      the request was valid; the *work* failed. The model reads this text
-   *      and can react (retry, apologize, try another path).
-   * The try/catch below is that policy in code: anything from the Vault layer
-   * (bad path, missing file) becomes an isError result; only an unknown tool
-   * name is a protocol-level throw.
+   * NOTE — the two failure channels, kept explicit:
+   * The spec separates (1) PROTOCOL errors — the request spoke the protocol
+   * wrong; JSON-RPC error response, no result — from (2) TOOL results with
+   * `isError: true` — a normal response saying the *work* failed, which the
+   * model reads and reacts to. SDK internals decide (1); we own (2) with this
+   * wrapper so the contract holds regardless of SDK version. File-not-found
+   * and friends are (2): the request was valid, the operation failed.
    */
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
-
-    // stderr-only observability: when a client hangs, this line is how we
-    // know whether the request ever REACHED us. Check the caller's MCP log
-    // (e.g. ~/Library/Logs/Claude/mcp*.log) for it.
-    console.error(`[obsidian-mcp] tools/call ${name}`);
-
-    try {
-      switch (name) {
-        case "vault_info": {
-          const notes = await vault.listNotes();
-          return text(`Vault root: ${config.vaultPath}\nMarkdown notes: ${notes.length}`);
-        }
-
-        case "list_notes": {
-          const folder = typeof args?.folder === "string" ? args.folder : ".";
-          const notes = await vault.listNotes(folder);
-          if (notes.length === 0) {
-            return text(`No notes found under '${folder}'.`);
-          }
-          const lines = notes.map(
-            (n) => `${n.path}  (${n.sizeBytes}B, modified ${n.modifiedAt})`,
-          );
-          return text(lines.join("\n"));
-        }
-
-        case "read_note": {
-          const content = await vault.readNote(requireString(args, "path"));
-          return text(content);
-        }
-
-        case "search_notes": {
-          const query = requireString(args, "query");
-          const { matches, total, truncated } = await vault.searchNotes(query, {
-            regex: args?.regex === true,
-            folder: typeof args?.folder === "string" ? args.folder : undefined,
-          });
-          if (total === 0) return text(`No matches for '${query}'.`);
-          const lines = matches.map((m) => `${m.path}:${m.line}: ${m.text}`);
-          if (truncated) {
-            lines.push(`(showing ${matches.length} of ${total} matches — narrow the query or folder)`);
-          }
-          return text(lines.join("\n"));
-        }
-
-        case "get_frontmatter": {
-          const data = await vault.getFrontmatter(requireString(args, "path"));
-          return text(JSON.stringify(data, null, 2));
-        }
-
-        case "create_note": {
-          const rel = await vault.createNote(requireString(args, "path"), requireString(args, "content"), {
-            overwrite: args?.overwrite === true,
-            frontmatter:
-              args?.frontmatter && typeof args.frontmatter === "object" && !Array.isArray(args.frontmatter)
-                ? (args.frontmatter as Record<string, unknown>)
-                : undefined,
-          });
-          return text(`Created ${rel}`);
-        }
-
-        case "edit_note": {
-          const result = await vault.editNote(requireString(args, "path"), toEditRequest(args));
-          return text(result);
-        }
-
-        case "delete_note": {
-          const trashPath = await vault.deleteNote(requireString(args, "path"));
-          return text(`Moved to ${trashPath} (recoverable from the vault's .trash folder)`);
-        }
-
-        case "get_backlinks": {
-          const backlinks = await vault.getBacklinks(requireString(args, "path"));
-          if (backlinks.length === 0) return text("No backlinks found.");
-          const lines = backlinks.map((bl) => `${bl.source}:${bl.line} — ${bl.snippet}`);
-          return text(`${backlinks.length} backlink(s):\n${lines.join("\n")}`);
-        }
-
-        case "move_note": {
-          const result = await vault.moveNote(requireString(args, "from_path"), requireString(args, "to_path"));
-          return text(
-            `Moved ${result.from} → ${result.to}\n` +
-              `Updated ${result.linksUpdated} link(s) in ${result.filesTouched} file(s).`,
-          );
-        }
-
-        default:
-          // Unknown tool = the client asked for something we never advertised.
-          // Protocol-level mistake → protocol error (SDK → JSON-RPC -32602).
-          throw new Error(`Unknown tool: ${name}`);
+  const guarded =
+    <A>(fn: (args: A) => Promise<{ content: { type: "text"; text: string }[] }>) =>
+    async (args: A) => {
+      try {
+        return await fn(args);
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: err instanceof Error ? err.message : String(err) }],
+        };
       }
-    } catch (err) {
-      // Re-throw protocol-level mistakes; everything else is tool feedback.
-      if (err instanceof Error && err.message.startsWith("Unknown tool:")) throw err;
-      if (err instanceof VaultPathError) return toolError(err.message);
-      // fs errors (ENOENT, EISDIR, ...) carry a code — surface it readably.
-      const msg = err instanceof Error ? `${err.message}` : String(err);
-      return toolError(msg);
-    }
-  });
+    };
+
+  const text = (body: string) => ({ content: [{ type: "text" as const, text: body }] });
+
+  // ── Reads (readOnlyHint: clients may skip approval prompts) ─────────────
+
+  server.registerTool(
+    "vault_info",
+    {
+      title: "Vault info",
+      description:
+        "Report the vault root path and how many markdown notes it contains. " +
+        "Use this first to confirm the vault is mounted and readable.",
+      annotations: { readOnlyHint: true },
+      inputSchema: {},
+    },
+    guarded(async () => {
+      const notes = await vault.listNotes();
+      return text(`Vault root: ${config.vaultPath}\nMarkdown notes: ${notes.length}`);
+    }),
+  );
+
+  server.registerTool(
+    "list_notes",
+    {
+      title: "List notes",
+      description:
+        "List markdown notes in the vault (or a subfolder), newest info included. " +
+        "Returns vault-relative paths — use those in read_note.",
+      annotations: { readOnlyHint: true },
+      inputSchema: {
+        folder: z
+          .string()
+          .optional()
+          .describe("Optional subfolder to list, vault-relative (e.g. 'projects')"),
+      },
+    },
+    guarded(async ({ folder }) => {
+      const notes = await vault.listNotes(folder ?? ".");
+      if (notes.length === 0) return text(`No notes found under '${folder ?? "."}'.`);
+      return text(
+        notes.map((n) => `${n.path}  (${n.sizeBytes}B, modified ${n.modifiedAt})`).join("\n"),
+      );
+    }),
+  );
+
+  server.registerTool(
+    "read_note",
+    {
+      title: "Read note",
+      description:
+        "Read the full markdown content of one note. `path` is vault-relative " +
+        "(from list_notes), e.g. 'projects/alpha.md'. The .md suffix is optional.",
+      annotations: { readOnlyHint: true },
+      inputSchema: { path: z.string().min(1).describe("Vault-relative note path") },
+    },
+    guarded(async ({ path: notePath }) => text(await vault.readNote(notePath))),
+  );
+
+  server.registerTool(
+    "search_notes",
+    {
+      title: "Search notes",
+      description:
+        "Full-text search across all notes. Default is case-insensitive substring " +
+        "matching; set regex=true to treat query as a regular expression. " +
+        "Returns path, line number and the matching line, capped at 50 hits.",
+      annotations: { readOnlyHint: true },
+      inputSchema: {
+        query: z.string().min(1).describe("Text to search for"),
+        regex: z.boolean().optional().describe("Treat query as a regular expression"),
+        folder: z.string().optional().describe("Optional subfolder to restrict the search"),
+      },
+    },
+    guarded(async ({ query, regex, folder }) => {
+      const { matches, total, truncated } = await vault.searchNotes(query, { regex, folder });
+      if (total === 0) return text(`No matches for '${query}'.`);
+      const lines = matches.map((m) => `${m.path}:${m.line}: ${m.text}`);
+      if (truncated) {
+        lines.push(`(showing ${matches.length} of ${total} matches — narrow the query or folder)`);
+      }
+      return text(lines.join("\n"));
+    }),
+  );
+
+  server.registerTool(
+    "get_frontmatter",
+    {
+      title: "Get frontmatter",
+      description:
+        "Read a note's YAML frontmatter (its properties: tags, dates, custom " +
+        "fields) as JSON. Cheaper than read_note when you only need metadata.",
+      annotations: { readOnlyHint: true },
+      inputSchema: { path: z.string().min(1).describe("Vault-relative note path") },
+    },
+    guarded(async ({ path: notePath }) =>
+      text(JSON.stringify(await vault.getFrontmatter(notePath), null, 2)),
+    ),
+  );
+
+  server.registerTool(
+    "get_backlinks",
+    {
+      title: "Get backlinks",
+      description:
+        "List notes that link TO a given note (wikilinks, embeds and relative " +
+        "markdown links). Use before editing or deleting to understand what " +
+        "references it, or to follow the knowledge graph backwards.",
+      annotations: { readOnlyHint: true },
+      inputSchema: { path: z.string().min(1).describe("Vault-relative note path") },
+    },
+    guarded(async ({ path: notePath }) => {
+      const backlinks = await vault.getBacklinks(notePath);
+      if (backlinks.length === 0) return text("No backlinks found.");
+      const lines = backlinks.map((bl) => `${bl.source}:${bl.line} — ${bl.snippet}`);
+      return text(`${backlinks.length} backlink(s):\n${lines.join("\n")}`);
+    }),
+  );
+
+  // ── Writes ──────────────────────────────────────────────────────────────
+
+  server.registerTool(
+    "create_note",
+    {
+      title: "Create note",
+      description:
+        "Create a new note. Fails if it already exists unless overwrite=true. " +
+        "Parent folders are created automatically. Pass `frontmatter` to have " +
+        "YAML properties generated; `content` is the markdown body.",
+      inputSchema: {
+        path: z.string().min(1).describe("Vault-relative note path (.md optional)"),
+        content: z.string().describe("Markdown body of the note"),
+        frontmatter: z
+          .record(z.string(), z.unknown())
+          .optional()
+          .describe("Optional YAML properties, e.g. {\"tags\": [\"research\"]}"),
+        overwrite: z.boolean().optional().describe("Replace an existing note"),
+      },
+    },
+    guarded(async ({ path: notePath, content, frontmatter, overwrite }) => {
+      const rel = await vault.createNote(notePath, content, { overwrite, frontmatter });
+      return text(`Created ${rel}`);
+    }),
+  );
+
+  /**
+   * One tool, four shapes of arguments. The discriminated logic lives in a
+   * superRefine so the model gets a per-mode, human-readable complaint
+   * ("'find' is required for mode 'find_replace'") instead of a generic
+   * validation failure.
+   */
+  const EditNoteArgs = z
+    .object({
+      path: z.string().min(1).describe("Vault-relative note path"),
+      mode: z.enum(["append", "prepend", "find_replace", "replace_section"]),
+      content: z.string().optional().describe("Text for append/prepend/replace_section"),
+      find: z.string().optional().describe("Text to find (find_replace)"),
+      replace: z.string().optional().describe("Replacement text (find_replace)"),
+      heading: z.string().optional().describe("Exact heading text (replace_section)"),
+    })
+    .superRefine((v, ctx) => {
+      const missing = (key: string) =>
+        ctx.addIssue({
+          code: "custom",
+          message: `'${key}' is required for mode '${v.mode}'`,
+          path: [key],
+        });
+      if (v.mode === "append" || v.mode === "prepend") {
+        if (v.content === undefined) missing("content");
+      } else if (v.mode === "find_replace") {
+        if (v.find === undefined) missing("find");
+        if (v.replace === undefined) missing("replace");
+      } else if (v.mode === "replace_section") {
+        if (v.heading === undefined) missing("heading");
+        if (v.content === undefined) missing("content");
+      }
+    });
+
+  server.registerTool(
+    "edit_note",
+    {
+      title: "Edit note",
+      description:
+        "Edit an existing note in place. Modes: 'append'/'prepend' content " +
+        "(prepend lands after frontmatter); 'find_replace' all occurrences of " +
+        "find→replace (fails if find is absent); 'replace_section' swaps " +
+        "everything under `heading` (subsections included) for `content`.",
+      inputSchema: EditNoteArgs.shape,
+    },
+    guarded(async ({ path: notePath, mode, content, find, replace, heading }) => {
+      const edit: EditRequest =
+        mode === "append" || mode === "prepend"
+          ? { mode, content: content! }
+          : mode === "find_replace"
+            ? { mode, find: find!, replace: replace! }
+            : { mode, heading: heading!, content: content! };
+      return text(await vault.editNote(notePath, edit));
+    }),
+  );
+
+  server.registerTool(
+    "delete_note",
+    {
+      title: "Delete note",
+      description:
+        "Move a note to the vault's .trash folder. NEVER a permanent delete — " +
+        "the note can be restored from .trash. Folders are refused, but " +
+        "folders left empty by the delete are removed automatically.",
+      inputSchema: { path: z.string().min(1).describe("Vault-relative note path") },
+    },
+    guarded(async ({ path: notePath }) => {
+      const trashPath = await vault.deleteNote(notePath);
+      return text(`Moved to ${trashPath} (recoverable from the vault's .trash folder)`);
+    }),
+  );
+
+  server.registerTool(
+    "move_note",
+    {
+      title: "Move note",
+      description:
+        "Move or rename a note (folders created automatically) and automatically " +
+        "update all links across the vault that pointed at its old location: " +
+        "wikilinks, embeds and relative markdown links. Emptied source folders " +
+        "are pruned. Prefer this over create+delete for renaming.",
+      inputSchema: {
+        from_path: z.string().min(1).describe("Current vault-relative path"),
+        to_path: z.string().min(1).describe("New vault-relative path"),
+      },
+    },
+    guarded(async ({ from_path, to_path }) => {
+      const result = await vault.moveNote(from_path, to_path);
+      return text(
+        `Moved ${result.from} → ${result.to}\n` +
+          `Updated ${result.linksUpdated} link(s) in ${result.filesTouched} file(s).`,
+      );
+    }),
+  );
 
   return server;
-}
-
-/** Success result carrying one text block — the shape models read. */
-function text(body: string) {
-  return { content: [{ type: "text" as const, text: body }] };
-}
-
-/** Failed-but-valid request: the model gets the reason and can adapt. */
-function toolError(message: string) {
-  return { isError: true as const, content: [{ type: "text" as const, text: message }] };
-}
-
-/** Narrow an unknown argument value with a model-readable complaint. */
-function requireString(args: Record<string, unknown> | undefined, key: string): string {
-  const value = args?.[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new VaultPathError(`Missing required string argument '${key}'`);
-  }
-  return value;
-}
-
-/**
- * Map the free-form JSON arguments onto the EditRequest union. Each mode's
- * required fields are enforced here with tool-error complaints — the model
- * gets told exactly what's missing, per mode, instead of a generic failure.
- */
-function toEditRequest(args: Record<string, unknown> | undefined): EditRequest {
-  const mode = requireString(args, "mode");
-  switch (mode) {
-    case "append":
-    case "prepend":
-      return { mode, content: requireString(args, "content") };
-    case "find_replace":
-      return { mode, find: requireString(args, "find"), replace: requireString(args, "replace") };
-    case "replace_section":
-      return { mode, heading: requireString(args, "heading"), content: requireString(args, "content") };
-    default:
-      throw new VaultPathError(
-        `Unknown mode '${mode}'. Valid modes: append, prepend, find_replace, replace_section`,
-      );
-  }
 }

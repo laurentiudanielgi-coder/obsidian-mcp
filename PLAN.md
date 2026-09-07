@@ -9,7 +9,7 @@ vault operations; the implementation stays explicit and documented.
 | --- | --- | --- |
 | Language | TypeScript | Existing TS skill compounds; SDK's low-level layer + reference servers make protocol visible |
 | Integration | Filesystem only | Vault = markdown files; no plugins, works when Obsidian is closed. REST plugin later if active-tab features are missed |
-| SDK layer | Low-level `Server` class | See the JSON-RPC methods, not just decorators |
+| SDK layer | `McpServer` + `registerTool` with zod schemas (recommended since SDK 1.30 deprecated low-level `Server`) | Type-safe contracts; protocol behavior pinned by raw-JSON-RPC wire tests |
 | Scope | Phase 1 = CRUD + search. RAG deferred to phase 2 | Foundation first; agentic full-text search covers much of "RAG" |
 | Deployment | Native node process spawned by Claude Desktop | Docker rejected: no isolation gain (server needs vault write access), VirtioFS overhead on search, slower iteration |
 | Vault | Single vault, <2k notes | No indexing strategy needed for v1 |

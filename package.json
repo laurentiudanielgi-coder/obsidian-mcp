@@ -1,6 +1,6 @@
 {
   "name": "obsidian-mcp",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "MCP server for Obsidian vaults over the filesystem. CRUD, search, backlinks, and link-repairing moves.",
   "type": "module",
   "engines": {
