@@ -1,7 +1,7 @@
 {
   "name": "obsidian-mcp",
   "version": "0.4.2",
-  "description": "MCP server for Obsidian vaults over the filesystem. Built to learn MCP internals.",
+  "description": "MCP server for Obsidian vaults over the filesystem. CRUD, search, backlinks, and link-repairing moves.",
   "type": "module",
   "engines": {
     "node": ">=20"

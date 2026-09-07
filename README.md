@@ -2,9 +2,9 @@
 
 **Let Claude (or any MCP client) read, search, edit, and reorganize your Obsidian vault — safely.**
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that treats your vault as what it really is: a folder of markdown files. No plugins, no cloud, no database. If Obsidian can be closed while Claude works on your notes, that's by design.
+A [Model Context Protocol](https://modelcontextprotocol.io) server that treats your vault as what it really is: a folder of markdown files. No plugins, no cloud, no database. Obsidian can be closed while Claude works on your notes.
 
-Written **to learn how MCP works internally**, and commented like it: the code deliberately uses the SDK's low-level `Server` class so the actual JSON-RPC protocol stays visible. If you want to understand what an MCP server *is* — beyond `npx some-server` — read this source next to the [spec](https://modelcontextprotocol.io/specification).
+The implementation is deliberately explicit: it uses the SDK's low-level `Server` class rather than the high-level helpers, so the protocol itself — handshake, capabilities, tool discovery, the two failure channels — stays visible in the source. If you want to understand what an MCP server actually is beyond `npx some-server`, read this code next to the [specification](https://modelcontextprotocol.io/specification).
 
 ## What you can ask Claude
 
@@ -89,7 +89,7 @@ src/
 
 Architecture in one sentence: **JSON-RPC messages** arrive over a **transport** (stdio), get dispatched by the **protocol layer** to tool handlers, which delegate every filesystem operation to the **vault layer** — the single choke point where safety lives.
 
-### For MCP learners
+### Code tour
 
 The codebase doubles as a guided tour:
 
