@@ -107,7 +107,7 @@ The codebase doubles as a guided tour:
 ### Development
 
 ```sh
-npm test          # 52 tests: unit (real temp filesystems) + wire-level (raw JSON-RPC)
+npm test          # unit tests against real temp filesystems + wire-level tests speaking raw JSON-RPC
 npm run dev       # tsc --watch
 ```
 

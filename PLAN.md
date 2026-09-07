@@ -7,7 +7,7 @@ vault operations; the implementation stays explicit and documented.
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| Language | TypeScript | Existing TS skill compounds; SDK's low-level layer + reference servers make protocol visible |
+| Language | TypeScript | Official first-class SDK; reference servers to read alongside |
 | Integration | Filesystem only | Vault = markdown files; no plugins, works when Obsidian is closed. REST plugin later if active-tab features are missed |
 | SDK layer | `McpServer` + `registerTool` with zod schemas (recommended since SDK 1.30 deprecated low-level `Server`) | Type-safe contracts; protocol behavior pinned by raw-JSON-RPC wire tests |
 | Scope | Phase 1 = CRUD + search. RAG deferred to phase 2 | Foundation first; agentic full-text search covers much of "RAG" |
@@ -25,3 +25,4 @@ vault operations; the implementation stays explicit and documented.
 6. Wire into Claude Desktop, end-to-end use
 7. (Phase 2) RAG: heading-aware chunking → embeddings (Ollama local vs API, decide then) → sqlite-vec or LanceDB → chokidar incremental index → `semantic_search`
 8. (Stretch) Swap stdio transport for Streamable HTTP — proves transport/protocol decoupling
+9. ✅ Migrated to `McpServer` + `registerTool` after SDK 1.30 deprecated the low-level `Server` (v0.5.0); wire tests confirmed the protocol behavior except one intentional change (unknown tools → isError results)
