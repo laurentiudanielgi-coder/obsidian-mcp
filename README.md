@@ -6,13 +6,13 @@ priority is understanding how MCP works internally, so the code deliberately
 uses the SDK's low-level `Server` class and comments explain the protocol at
 every step.
 
-## What it does (v0.3)
+## What it does (v0.4)
 
 - Speaks JSON-RPC over stdio (the transport Claude Desktop uses to spawn it)
 - Completes the `initialize` handshake and declares `tools` capability
-- Read tools: `vault_info`, `list_notes`, `read_note`, `search_notes`, `get_frontmatter`
-- Write tools: `create_note` (no-clobber by default, optional YAML frontmatter), `edit_note` (append / prepend / find_replace / replace_section), `delete_note` (→ `.trash/`)
-- Safety: all paths guarded against vault escape; creates are kernel-atomic (`wx` flag); deletes are reversible
+- Read: `vault_info`, `list_notes`, `read_note`, `search_notes`, `get_frontmatter`, `get_backlinks`
+- Write: `create_note` (no-clobber, optional YAML frontmatter), `edit_note` (append / prepend / find_replace / replace_section), `delete_note` (→ `.trash/`), `move_note` (repairs links vault-wide)
+- Safety: path-escape guard, kernel-atomic creates, reversible deletes, link-preserving moves
 
 Full roadmap in [PLAN.md](PLAN.md).
 
@@ -69,6 +69,8 @@ client sends. Reading that test is the fastest way to see the protocol.
 | Trash semantics (rename is atomic; `.trash` convention) | `src/vault.ts`, `deleteToTrash` |
 | Kernel-atomic create (the `wx` flag) vs exists?-then-write | `src/vault.ts`, `createNote` |
 | Respecting frontmatter during edits; self-correcting errors | `src/vault.ts`, `editNote` |
+| Obsidian link resolution (bare basename = only when unique) | `src/vault.ts`, `linkMatches` |
+| Why the basename index must reflect the *pre-move* world | `src/vault.ts`, `moveNote` |
 | Transports: stdio framing, stdout-is-protocol rule | `src/index.ts` |
 | Raw wire format | `test/server.test.ts` |
 

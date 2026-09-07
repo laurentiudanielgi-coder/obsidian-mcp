@@ -215,6 +215,40 @@ describe("MCP handshake and tools", () => {
     expect((await read.promise).result.isError).toBe(true);
   });
 
+  it("reports backlinks with sources and lines", async () => {
+    const setup = request("tools/call", {
+      name: "create_note",
+      arguments: { path: "links/source", content: "points at [[target]]" },
+    });
+    await setup.promise;
+    await request("tools/call", { name: "create_note", arguments: { path: "links/target", content: "# T" } }).promise;
+
+    const { promise } = request("tools/call", {
+      name: "get_backlinks",
+      arguments: { path: "links/target" },
+    });
+    const res = await promise;
+
+    expect(res.result.content[0].text).toContain("links/source.md:1");
+    expect(res.result.content[0].text).toContain("points at [[target]]");
+  });
+
+  it("moves a note and confirms link repair in the result", async () => {
+    const { promise } = request("tools/call", {
+      name: "move_note",
+      arguments: { from_path: "links/target", to_path: "links/target-renamed" },
+    });
+    const res = await promise;
+
+    expect(res.result.isError).toBeUndefined();
+    expect(res.result.content[0].text).toContain("links/target.md → links/target-renamed.md");
+    expect(res.result.content[0].text).toMatch(/Updated 1 link/);
+
+    // the source note's link was rewritten to the new name
+    const read = request("tools/call", { name: "read_note", arguments: { path: "links/source.md" } });
+    expect((await read.promise).result.content[0].text).toContain("[[target-renamed]]");
+  });
+
   it("rejects unknown tools as a protocol error", async () => {
     const { promise } = request("tools/call", { name: "does_not_exist", arguments: {} });
     const res = await promise;

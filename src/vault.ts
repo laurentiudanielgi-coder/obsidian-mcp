@@ -47,6 +47,88 @@ function joinBlocks(a: string, b: string): string {
   return [a.trim(), b.trim()].filter(Boolean).join("\n\n") + "\n";
 }
 
+// ── Link parsing/rewriting (module-level: pure string logic, no fs) ────────
+
+export interface Backlink {
+  source: string;
+  line: number;
+  snippet: string;
+}
+
+interface LinkRef {
+  /** Exact substring as it appears in the line — what a rewrite replaces. */
+  raw: string;
+  /** Target as written, alias/heading stripped, URL-decoded for md links. */
+  target: string;
+  kind: "wikilink" | "mdlink";
+}
+
+/**
+ * Extract links from one line.
+ * Wikilink regex: target may not contain [ ] | #, then optional #heading
+ * and/or |alias. `![[embed]]` matches too (the "!" stays outside the match).
+ * Markdown links: only .md hrefs count as note links — http(s) and asset
+ * links are ignored.
+ */
+function extractLinks(line: string): LinkRef[] {
+  const refs: LinkRef[] = [];
+
+  const wikiRe = /\[\[([^[\]|#]+)(#[^[\]|]*)?(?:\|([^[\]]*))?\]\]/g;
+  for (const m of line.matchAll(wikiRe)) {
+    refs.push({ raw: m[0], target: m[1].trim(), kind: "wikilink" });
+  }
+
+  const mdRe = /\[[^\]]*\]\(([^)\s]+)\)/g;
+  for (const m of line.matchAll(mdRe)) {
+    const href = m[1];
+    const pathPart = href.split("#")[0];
+    if (!pathPart.toLowerCase().endsWith(".md")) continue;
+    const target = safeDecode(pathPart);
+    if (target) refs.push({ raw: m[0], target, kind: "mdlink" });
+  }
+  return refs;
+}
+
+function safeDecode(s: string): string | undefined {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return undefined; // malformed percent-encoding — leave the link alone
+  }
+}
+
+/** Append ".md" unless the target already ends with it. */
+function ext(t: string): string {
+  return t.toLowerCase().endsWith(".md") ? "" : ".md";
+}
+
+/** basename → count, for the unique-basename wikilink rule. */
+function basenameCounts(files: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const f of files) {
+    const base = path.basename(f).replace(/\.md$/i, "");
+    counts.set(base, (counts.get(base) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Produce the replacement wikilink text, preserving alias/heading and the
+ * note's style: path-form links get the new full path, bare links stay bare
+ * with the new basename (see the uniqueness caveat on moveNote).
+ * Markdown links are rebased at the call site — their hrefs depend on the
+ * linking file's folder, which rewriteWikilink doesn't know about.
+ */
+function rewriteWikilink(link: LinkRef, destRel: string): string {
+  const destNoExt = destRel.replace(/\.md$/, "");
+  const destBase = path.basename(destNoExt);
+
+  const m = link.raw.match(/^(!?\[\[)([^[\]|#]+)((#[^[\]|]*)?(\|[^\]]*)?\]\])$/);
+  if (!m) return link.raw; // unknown shape — never mangle what we can't parse
+  const newTarget = link.target.includes("/") ? destNoExt : destBase;
+  return `${m[1]}${newTarget}${m[3]}`;
+}
+
 /** Directories that are vault plumbing, not notes. */
 const SKIP_DIRS = new Set([".obsidian", ".trash", ".git", ".smart-env"]);
 
@@ -251,6 +333,178 @@ export class Vault {
   /** delete_note tool target — see deleteToTrash for the semantics. */
   async deleteNote(userPath: string): Promise<string> {
     return this.deleteToTrash(this.normalize(userPath));
+  }
+
+  // ── Links: backlinks + moving notes without breaking the graph ─────────
+
+  /**
+   * LEARNING NOTE — how Obsidian links resolve (simplified but faithful):
+   *  - Wikilinks are vault-root-based or bare basenames: [[folder/note]],
+   *    [[note]], [[note#heading|alias]], and embeds (![[note]]) which count
+   *    as backlinks too. A BARE basename is only unambiguous if exactly one
+   *    note in the vault has that name — Obsidian's "shortest path when
+   *    possible" convention.
+   *  - Markdown links are filesystem-relative to the linking note: [x](a/b.md).
+   * Backlink DETECTION and link REWRITING must agree on these rules, so both
+   * share `linkMatches()` below. If they drift, moves silently corrupt links.
+   */
+  async getBacklinks(userPath: string): Promise<Backlink[]> {
+    const targetRel = this.normalize(userPath);
+    const targetAbs = this.safeResolve(targetRel);
+    const files = await this.collectMarkdown(".");
+    const basenames = basenameCounts(files);
+
+    const backlinks: Backlink[] = [];
+    for (const file of files) {
+      const rel = path.relative(this.root, file);
+      if (rel === targetRel) continue;
+      const lines = (await readFile(file, "utf8")).split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        for (const link of extractLinks(lines[i])) {
+          if (this.linkMatches(link, path.dirname(file), targetAbs, targetRel, basenames)) {
+            backlinks.push({
+              source: rel,
+              line: i + 1,
+              snippet: lines[i].trim().slice(0, 120),
+            });
+            break; // one hit per line is enough for a backlink listing
+          }
+        }
+      }
+    }
+    return backlinks;
+  }
+
+  /**
+   * Move/rename a note, then repair the graph:
+   *  1. rename the file (atomic, same filesystem)
+   *  2. in every OTHER note, rewrite links that pointed here
+   *     - wikilinks written as full paths get the new full path
+   *     - bare-basename wikilinks stay bare (they still resolve — unless the
+   *       rename created a name collision; documented limitation, see below)
+   *     - relative markdown links get a recomputed relative path
+   *  3. in the MOVED note itself, fix ITS markdown links (they were relative
+   *     to the old folder; wikilinks inside it are unaffected — they don't
+   *     depend on the note's own location)
+   *
+   * Known limitation worth knowing: if the move creates an ambiguous basename
+   * (two notes named "daily" now exist), pre-existing bare [[daily]] links
+   * become ambiguous exactly as they would in Obsidian itself. We don't chase
+   * that case; Obsidian doesn't fully either.
+   */
+  async moveNote(
+    fromUserPath: string,
+    toUserPath: string,
+  ): Promise<{ from: string; to: string; linksUpdated: number; filesTouched: number }> {
+    const from = this.normalize(fromUserPath);
+    const to = this.normalize(toUserPath);
+    if (from === to) throw new VaultPathError("Source and destination are the same");
+
+    const fromAbs = this.safeResolve(from);
+    const toAbs = this.safeResolve(to);
+    if (!(await stat(fromAbs).catch(() => null))) throw new VaultPathError(`No such note: ${from}`);
+    if (await stat(toAbs).then(Boolean).catch(() => false)) {
+      throw new VaultPathError(`Destination already exists: ${to}`);
+    }
+    await mkdir(path.dirname(toAbs), { recursive: true });
+    await rename(fromAbs, toAbs);
+
+    const files = await this.collectMarkdown(".");
+    // Basename uniqueness must be judged in the PRE-move world: bare [[old]]
+    // links resolved against a vault where the old name still existed. After
+    // the rename the index would no longer contain it and we'd miss them.
+    const preMoveWorld = files
+      .filter((f) => path.relative(this.root, f) !== to)
+      .concat(fromAbs);
+    const basenames = basenameCounts(preMoveWorld);
+    let linksUpdated = 0;
+    let filesTouched = 0;
+
+    for (const file of files) {
+      const rel = path.relative(this.root, file);
+      const isMovedNote = rel === to;
+      const raw = await readFile(file, "utf8");
+      const lines = raw.split("\n");
+      let changed = false;
+
+      for (let i = 0; i < lines.length; i++) {
+        for (const link of extractLinks(lines[i])) {
+          let matches = false;
+          if (isMovedNote) {
+            // Every markdown href in the moved note is stale — it was
+            // relative to the OLD folder, whatever it points at.
+            matches = link.kind === "mdlink";
+          } else if (link.kind === "mdlink") {
+            matches = path.resolve(path.dirname(file), link.target + ext(link.target)) === fromAbs;
+          } else {
+            // Inbound wikilinks live in OTHER files. A note's wikilink to
+            // itself (if any) is location-independent — nothing to repair.
+            matches = this.linkMatches(link, path.dirname(file), fromAbs, from, basenames);
+          }
+          if (!matches) continue;
+
+          let replacement: string;
+          if (link.kind === "mdlink") {
+            // Inbound links (other files) must now point at the moved note's
+            // NEW location. Outbound links in the moved note still point at
+            // the same targets — only their relative distance changed, so
+            // rebase the href from the note's NEW folder.
+            const rawHref = link.raw.match(/\(([^)\s]+)\)/)?.[1] ?? "";
+            const anchor = rawHref.includes("#") ? `#${rawHref.split("#").slice(1).join("#")}` : "";
+            const href = isMovedNote
+              ? path.relative(
+                  path.dirname(toAbs),
+                  path.resolve(path.dirname(fromAbs), link.target + ext(link.target)),
+                )
+              : path.relative(path.dirname(file), toAbs);
+            replacement = link.raw.replace(/\(([^)\s]+)\)/, `(${encodeURI(href)}${anchor})`);
+          } else {
+            replacement = rewriteWikilink(link, to);
+          }
+          if (replacement === link.raw) continue; // e.g. bare link, basename unchanged — nothing to do
+          lines[i] = lines[i].split(link.raw).join(replacement);
+          linksUpdated++;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await writeFile(file, lines.join("\n"));
+        filesTouched++;
+      }
+    }
+    return { from, to, linksUpdated, filesTouched };
+  }
+
+  /**
+   * Does this link, as written from sourceDir, resolve to the target?
+   * Wikilinks: exact path, vault-root path, or unique basename.
+   * Markdown links: relative resolution against the linking note's folder.
+   */
+  private linkMatches(
+    link: LinkRef,
+    sourceDir: string,
+    targetAbs: string,
+    targetRel: string,
+    basenames: Map<string, number>,
+  ): boolean {
+    const t = link.target.trim();
+    if (!t) return false;
+
+    if (link.kind === "mdlink") {
+      const abs = path.resolve(sourceDir, t + ext(t));
+      return abs === targetAbs;
+    }
+
+    const noExt = targetRel.replace(/\.md$/, "");
+    if (t === noExt || t === targetRel) return true;
+    if (path.resolve(this.root, t + ext(t)) === targetAbs) return true;
+    // Bare basename: only when unambiguous (see class comment).
+    const base = path.basename(t).replace(/\.md$/, "");
+    return (
+      !t.includes("/") &&
+      base === path.basename(noExt) &&
+      (basenames.get(base) ?? 0) === 1
+    );
   }
 
   /** Recursively list notes, vault-relative, skipping plumbing directories. */

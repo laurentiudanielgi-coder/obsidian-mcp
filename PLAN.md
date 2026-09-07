@@ -21,7 +21,7 @@ Everything else (features, polish) is secondary.
 2. ✅ fs layer with path safety (traversal guard) + trash deletes (v0.2)
 3. ✅ Read tools: `read_note`, `list_notes`, `search_notes`, `get_frontmatter` (v0.3)
 4. ✅ Write tools: `create_note` (wx-flag no-clobber, YAML generation), `edit_note` (append / prepend-after-frontmatter / find_replace / replace_section), `delete_note` (→ .trash)
-5. Link tools (own milestone — real complexity lives here): `get_backlinks`, wikilink updates on `move_note`
+5. ✅ Link tools: `get_backlinks` (wikilinks/embeds/relative-md, unique-basename rule), `move_note` with automatic link repair across the vault
 6. Wire into Claude Desktop, end-to-end use on the Mac
 7. (Phase 2) RAG: heading-aware chunking → embeddings (Ollama local vs API, decide then) → sqlite-vec or LanceDB → chokidar incremental index → `semantic_search`
 8. (Stretch) Swap stdio transport for Streamable HTTP — proves transport/protocol decoupling

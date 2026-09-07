@@ -40,7 +40,7 @@ import { Vault, VaultPathError, type EditRequest } from "./vault.js";
  */
 export function createServer(config: Config): Server {
   const server = new Server(
-    { name: "obsidian-mcp", version: "0.3.0" },
+    { name: "obsidian-mcp", version: "0.4.0" },
     { capabilities: { tools: {} } },
   );
 
@@ -183,6 +183,36 @@ export function createServer(config: Config): Server {
             required: ["path"],
           },
         },
+        {
+          name: "get_backlinks",
+          description:
+            "List notes that link TO a given note (wikilinks, embeds and relative " +
+            "markdown links). Use before editing or deleting to understand what " +
+            "references it, or to follow the knowledge graph backwards.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              path: { type: "string", description: "Vault-relative note path" },
+            },
+            required: ["path"],
+          },
+        },
+        {
+          name: "move_note",
+          description:
+            "Move or rename a note (folders created automatically) and automatically " +
+            "update all links across the vault that pointed at its old location: " +
+            "wikilinks, embeds and relative markdown links. Prefer this over " +
+            "create+delete for renaming.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              from_path: { type: "string", description: "Current vault-relative path" },
+              to_path: { type: "string", description: "New vault-relative path" },
+            },
+            required: ["from_path", "to_path"],
+          },
+        },
       ],
     };
   });
@@ -266,6 +296,21 @@ export function createServer(config: Config): Server {
         case "delete_note": {
           const trashPath = await vault.deleteNote(requireString(args, "path"));
           return text(`Moved to ${trashPath} (recoverable from the vault's .trash folder)`);
+        }
+
+        case "get_backlinks": {
+          const backlinks = await vault.getBacklinks(requireString(args, "path"));
+          if (backlinks.length === 0) return text("No backlinks found.");
+          const lines = backlinks.map((bl) => `${bl.source}:${bl.line} — ${bl.snippet}`);
+          return text(`${backlinks.length} backlink(s):\n${lines.join("\n")}`);
+        }
+
+        case "move_note": {
+          const result = await vault.moveNote(requireString(args, "from_path"), requireString(args, "to_path"));
+          return text(
+            `Moved ${result.from} → ${result.to}\n` +
+              `Updated ${result.linksUpdated} link(s) in ${result.filesTouched} file(s).`,
+          );
         }
 
         default:

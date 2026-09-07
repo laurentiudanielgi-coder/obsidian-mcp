@@ -236,6 +236,63 @@ describe("deleteNote", () => {
   });
 });
 
+describe("links: getBacklinks + moveNote", () => {
+  beforeAll(async () => {
+    await mkdir(path.join(root, "amb1"), { recursive: true });
+    await mkdir(path.join(root, "amb2"), { recursive: true });
+    await writeFile(path.join(root, "b.md"), "# B\n");
+    await writeFile(path.join(root, "a.md"), "see [[b]] here\n");
+    await writeFile(path.join(root, "c.md"), "[[b|the alias]]\n[[b#x]]\n");
+    await writeFile(path.join(root, "d.md"), "![[b]] embed\n");
+    await mkdir(path.join(root, "notes"), { recursive: true });
+    await writeFile(path.join(root, "notes", "m.md"), "[text](../b.md)\n");
+    // ambiguity: two notes named `dup` — bare links must NOT resolve
+    await writeFile(path.join(root, "amb1", "dup.md"), "# one\n");
+    await writeFile(path.join(root, "amb2", "dup.md"), "# two\n");
+    await writeFile(path.join(root, "ambtest.md"), "bare [[dup]] ambiguous\npath [[amb1/dup]] exact\n");
+  });
+
+  it("finds bare, aliased, heading, embed and markdown-link references", async () => {
+    const backlinks = await vault.getBacklinks("b");
+    const where = backlinks.map((bl) => `${bl.source}:${bl.line}`).sort();
+    expect(where).toEqual(["a.md:1", "c.md:1", "c.md:2", "d.md:1", "notes/m.md:1"]);
+  });
+
+  it("treats ambiguous bare links as non-links; path links still resolve", async () => {
+    // amb1/dup is referenced once by bare name (skipped — ambiguous) and
+    // once by path (counted).
+    expect((await vault.getBacklinks("amb1/dup")).map((bl) => bl.line)).toEqual([2]);
+    expect(await vault.getBacklinks("amb2/dup")).toEqual([]);
+  });
+
+  it("moves a note and repairs every link shape", async () => {
+    await writeFile(path.join(root, "inbound-bare.md"), "[[beta]] works\n");
+    await writeFile(path.join(root, "inbound-path.md"), "see [[notes/beta|al]] and [[notes/beta#h]]\n");
+    await writeFile(path.join(root, "inbound-md.md"), "[t](notes/beta.md)\n");
+    await writeFile(path.join(root, "notes", "beta.md"), "# Beta\n\n[rel](gamma.md)\n");
+    await writeFile(path.join(root, "notes", "gamma.md"), "# Gamma\n");
+
+    const result = await vault.moveNote("notes/beta", "archive/beta2");
+    expect(result.to).toBe("archive/beta2.md");
+    expect(result.filesTouched).toBe(4); // 3 inbound files + the moved note itself
+
+    expect(await vault.readNote("inbound-bare.md")).toContain("[[beta2]]");
+    expect(await vault.readNote("inbound-path.md")).toContain("[[archive/beta2|al]] and [[archive/beta2#h]]");
+    // inbound markdown link now points at the new location
+    expect(await vault.readNote("inbound-md.md")).toContain("(archive/beta2.md)");
+    // the MOVED note's own relative link was rebased to its new folder
+    expect(await vault.readNote("archive/beta2.md")).toContain("[rel](../notes/gamma.md)");
+    await expect(vault.readNote("notes/beta.md")).rejects.toThrow(/ENOENT/);
+  });
+
+  it("refuses destructive move mistakes", async () => {
+    await expect(vault.moveNote("b.md", "b.md")).rejects.toThrow(/same/);
+    await expect(vault.moveNote("b.md", "inbox.md")).rejects.toThrow(/already exists/);
+    await expect(vault.moveNote("ghost.md", "x.md")).rejects.toThrow(/No such note/);
+    await expect(vault.moveNote("../outside.md", "x.md")).rejects.toThrow(VaultPathError);
+  });
+});
+
 afterAll(async () => {
   await rm(root, { recursive: true, force: true });
   // sanity: nothing about the fixture leaks
