@@ -18,8 +18,8 @@ Everything else (features, polish) is secondary.
 ## Milestones
 
 1. ✅ Scaffold + minimal MCP server + vault config + handshake test (v0.1)
-2. fs layer with path safety (traversal guard) + trash deletes
-3. Read tools: `read_note`, `list_notes`, `search_notes`, `manage_frontmatter` (read)
+2. ✅ fs layer with path safety (traversal guard) + trash deletes (v0.2)
+3. 🔨 Read tools: ✅ `read_note`, ✅ `list_notes`, next: `search_notes`, `manage_frontmatter` (read)
 4. Write tools: `create_note`, `edit_note` (append / replace-under-heading / find-replace), `delete_note`
 5. Link tools (own milestone — real complexity lives here): `get_backlinks`, wikilink updates on `move_note`
 6. Wire into Claude Desktop, end-to-end use on the Mac

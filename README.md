@@ -6,11 +6,12 @@ priority is understanding how MCP works internally, so the code deliberately
 uses the SDK's low-level `Server` class and comments explain the protocol at
 every step.
 
-## What it does (v0.1 — milestone 1)
+## What it does (v0.2)
 
 - Speaks JSON-RPC over stdio (the transport Claude Desktop uses to spawn it)
 - Completes the `initialize` handshake and declares `tools` capability
-- Exposes one tool: `vault_info` (vault path + note count) to prove the loop
+- Tools: `vault_info`, `list_notes`, `read_note`
+- Safety: all paths guarded against vault escape; deletes land in `.trash/`
 
 Full roadmap in [PLAN.md](PLAN.md).
 
@@ -63,6 +64,8 @@ client sends. Reading that test is the fastest way to see the protocol.
 | The `initialize` handshake + capabilities | `src/server.ts`, top comment |
 | Tool discovery: `tools/list` descriptions are for the model | `src/server.ts` |
 | Tool errors vs protocol errors (two failure channels) | `src/server.ts`, `tools/call` handler |
+| Path-traversal guard when an LLM builds the paths | `src/vault.ts`, `safeResolve` |
+| Trash semantics (rename is atomic; `.trash` convention) | `src/vault.ts`, `deleteToTrash` |
 | Transports: stdio framing, stdout-is-protocol rule | `src/index.ts` |
 | Raw wire format | `test/server.test.ts` |
 

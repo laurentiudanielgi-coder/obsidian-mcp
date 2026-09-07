@@ -16,8 +16,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Config } from "./config.js";
-import { readdir } from "node:fs/promises";
-import path from "node:path";
+import { Vault, VaultPathError } from "./vault.js";
 
 /**
  * LEARNING NOTE — the MCP lifecycle (what happens before any tool runs):
@@ -41,12 +40,13 @@ import path from "node:path";
  */
 export function createServer(config: Config): Server {
   const server = new Server(
-    // Identification, surfaced to the client during `initialize` and shown in
-    // its UI/debug output. Purely informational.
-    { name: "obsidian-mcp", version: "0.1.0" },
-    // Capabilities: we implement the `tools` feature, nothing else (yet).
+    { name: "obsidian-mcp", version: "0.2.0" },
     { capabilities: { tools: {} } },
   );
+
+  // The fs layer from milestone 2. Every tool below goes through it — no
+  // handler touches a path directly.
+  const vault = new Vault(config.vaultPath);
 
   /**
    * LEARNING NOTE — "tools/list" is metadata, not execution:
@@ -67,11 +67,35 @@ export function createServer(config: Config): Server {
           description:
             "Report the vault root path and how many markdown notes it contains. " +
             "Use this first to confirm the vault is mounted and readable.",
+          inputSchema: { type: "object" as const, properties: {}, required: [] },
+        },
+        {
+          name: "list_notes",
+          description:
+            "List markdown notes in the vault (or a subfolder), newest info included. " +
+            "Returns vault-relative paths — use those in read_note.",
           inputSchema: {
             type: "object" as const,
-            properties: {},
-            // `[]` = no arguments accepted. JSON Schema keyword, not a typo.
+            properties: {
+              folder: {
+                type: "string",
+                description: "Optional subfolder to list, vault-relative (e.g. 'projects'). Defaults to the whole vault.",
+              },
+            },
             required: [],
+          },
+        },
+        {
+          name: "read_note",
+          description:
+            "Read the full markdown content of one note. `path` is vault-relative " +
+            "(from list_notes), e.g. 'projects/alpha.md'. The .md suffix is optional.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              path: { type: "string", description: "Vault-relative note path" },
+            },
+            required: ["path"],
           },
         },
       ],
@@ -88,43 +112,75 @@ export function createServer(config: Config): Server {
    *      says the operation failed. This is how "file not found" is reported:
    *      the request was valid; the *work* failed. The model reads this text
    *      and can react (retry, apologize, try another path).
-   * Getting these backwards is the classic MCP bug: throwing on a missing
-   * file surfaces as a protocol crash to the client instead of feedback
-   * to the model.
+   * The try/catch below is that policy in code: anything from the Vault layer
+   * (bad path, missing file) becomes an isError result; only an unknown tool
+   * name is a protocol-level throw.
    */
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name } = request.params;
+    const { name, arguments: args } = request.params;
 
-    if (name === "vault_info") {
-      const noteCount = await countMarkdownNotes(config.vaultPath);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Vault root: ${config.vaultPath}\nMarkdown notes: ${noteCount}`,
-          },
-        ],
-      };
+    try {
+      switch (name) {
+        case "vault_info": {
+          const notes = await vault.listNotes();
+          return text(`Vault root: ${config.vaultPath}\nMarkdown notes: ${notes.length}`);
+        }
+
+        case "list_notes": {
+          const folder = typeof args?.folder === "string" ? args.folder : ".";
+          const notes = await vault.listNotes(folder);
+          if (notes.length === 0) {
+            return text(`No notes found under '${folder}'.`);
+          }
+          const lines = notes.map(
+            (n) => `${n.path}  (${n.sizeBytes}B, modified ${n.modifiedAt})`,
+          );
+          return text(lines.join("\n"));
+        }
+
+        case "read_note": {
+          // Be forgiving at the boundary: a model that saw "alpha" without
+          // .md in a listing should not fail. Cheap normalization here beats
+          // a failed call round-trip.
+          let notePath = requireString(args, "path");
+          if (!notePath.endsWith(".md")) notePath += ".md";
+          const content = await vault.readNote(notePath);
+          return text(content);
+        }
+
+        default:
+          // Unknown tool = the client asked for something we never advertised.
+          // Protocol-level mistake → protocol error (SDK → JSON-RPC -32602).
+          throw new Error(`Unknown tool: ${name}`);
+      }
+    } catch (err) {
+      // Re-throw protocol-level mistakes; everything else is tool feedback.
+      if (err instanceof Error && err.message.startsWith("Unknown tool:")) throw err;
+      if (err instanceof VaultPathError) return toolError(err.message);
+      // fs errors (ENOENT, EISDIR, ...) carry a code — surface it readably.
+      const msg = err instanceof Error ? `${err.message}` : String(err);
+      return toolError(msg);
     }
-
-    // Unknown tool name = the client/model asked for something we never
-    // advertised. That is a protocol-level mistake → protocol error.
-    // The SDK's `McpError` becomes JSON-RPC error code -32602 (invalid params).
-    throw new Error(`Unknown tool: ${name}`);
   });
 
   return server;
 }
 
-/** Recursively count *.md files under the vault. Tiny on purpose — the real fs layer arrives in milestone 2. */
-async function countMarkdownNotes(dir: string): Promise<number> {
-  let count = 0;
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    // `.obsidian` is Obsidian's own config dir (workspace state, plugins) — not notes.
-    if (entry.name === ".obsidian" || entry.name === ".trash") continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) count += await countMarkdownNotes(full);
-    else if (entry.isFile() && entry.name.endsWith(".md")) count++;
+/** Success result carrying one text block — the shape models read. */
+function text(body: string) {
+  return { content: [{ type: "text" as const, text: body }] };
+}
+
+/** Failed-but-valid request: the model gets the reason and can adapt. */
+function toolError(message: string) {
+  return { isError: true as const, content: [{ type: "text" as const, text: message }] };
+}
+
+/** Narrow an unknown argument value with a model-readable complaint. */
+function requireString(args: Record<string, unknown> | undefined, key: string): string {
+  const value = args?.[key];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new VaultPathError(`Missing required string argument '${key}'`);
   }
-  return count;
+  return value;
 }

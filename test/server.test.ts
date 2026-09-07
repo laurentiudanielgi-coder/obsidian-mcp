@@ -110,6 +110,52 @@ describe("MCP handshake and tools", () => {
     expect(res.result.content[0].text).toContain("Markdown notes: 2");
   });
 
+  it("lists notes with vault-relative paths", async () => {
+    const { promise } = request("tools/call", { name: "list_notes", arguments: {} });
+    const res = await promise;
+
+    expect(res.result.isError).toBeUndefined();
+    expect(res.result.content[0].text).toContain("inbox.md");
+    expect(res.result.content[0].text).toContain("projects/alpha.md");
+  });
+
+  it("reads a note, forgiving a missing .md suffix", async () => {
+    const withSuffix = request("tools/call", {
+      name: "read_note",
+      arguments: { path: "projects/alpha.md" },
+    });
+    const withoutSuffix = request("tools/call", {
+      name: "read_note",
+      arguments: { path: "projects/alpha" },
+    });
+
+    expect((await withSuffix.promise).result.content[0].text).toBe("# Alpha\n");
+    expect((await withoutSuffix.promise).result.content[0].text).toBe("# Alpha\n");
+  });
+
+  it("reports a missing note as a tool error — a result, NOT a protocol error", async () => {
+    const { promise } = request("tools/call", {
+      name: "read_note",
+      arguments: { path: "ghost.md" },
+    });
+    const res = await promise;
+
+    expect(res.error).toBeUndefined(); // protocol was fine
+    expect(res.result.isError).toBe(true); // the work failed, model gets the reason
+    expect(res.result.content[0].text).toMatch(/ENOENT|No such/);
+  });
+
+  it("contains traversal attempts as tool errors — never reads outside the vault", async () => {
+    const { promise } = request("tools/call", {
+      name: "read_note",
+      arguments: { path: "../../../../etc/passwd" },
+    });
+    const res = await promise;
+
+    expect(res.result.isError).toBe(true);
+    expect(res.result.content[0].text).toMatch(/escapes the vault/);
+  });
+
   it("rejects unknown tools as a protocol error", async () => {
     const { promise } = request("tools/call", { name: "does_not_exist", arguments: {} });
     const res = await promise;
