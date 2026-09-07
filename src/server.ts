@@ -16,7 +16,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { Config } from "./config.js";
-import { Vault, VaultPathError } from "./vault.js";
+import { Vault, VaultPathError, type EditRequest } from "./vault.js";
 
 /**
  * LEARNING NOTE — the MCP lifecycle (what happens before any tool runs):
@@ -40,7 +40,7 @@ import { Vault, VaultPathError } from "./vault.js";
  */
 export function createServer(config: Config): Server {
   const server = new Server(
-    { name: "obsidian-mcp", version: "0.2.0" },
+    { name: "obsidian-mcp", version: "0.3.0" },
     { capabilities: { tools: {} } },
   );
 
@@ -98,6 +98,91 @@ export function createServer(config: Config): Server {
             required: ["path"],
           },
         },
+        {
+          name: "search_notes",
+          description:
+            "Full-text search across all notes. Default is case-insensitive substring " +
+            "matching; set regex=true to treat query as a regular expression. " +
+            "Returns path, line number and the matching line, capped at 50 hits.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              query: { type: "string", description: "Text to search for" },
+              regex: { type: "boolean", description: "Treat query as a regular expression" },
+              folder: { type: "string", description: "Optional subfolder to restrict the search" },
+            },
+            required: ["query"],
+          },
+        },
+        {
+          name: "get_frontmatter",
+          description:
+            "Read a note's YAML frontmatter (its properties: tags, dates, custom " +
+            "fields) as JSON. Cheaper than read_note when you only need metadata.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              path: { type: "string", description: "Vault-relative note path" },
+            },
+            required: ["path"],
+          },
+        },
+        {
+          name: "create_note",
+          description:
+            "Create a new note. Fails if it already exists unless overwrite=true. " +
+            "Parent folders are created automatically. Pass `frontmatter` to have " +
+            "YAML properties generated; `content` is the markdown body.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              path: { type: "string", description: "Vault-relative note path (.md optional)" },
+              content: { type: "string", description: "Markdown body of the note" },
+              frontmatter: {
+                type: "object",
+                description: "Optional YAML properties, e.g. {\"tags\": [\"research\"]}",
+              },
+              overwrite: { type: "boolean", description: "Replace an existing note" },
+            },
+            required: ["path", "content"],
+          },
+        },
+        {
+          name: "edit_note",
+          description:
+            "Edit an existing note in place. Modes: 'append'/'prepend' content " +
+            "(prepend lands after frontmatter); 'find_replace' all occurrences of " +
+            "find→replace (fails if find is absent); 'replace_section' swaps " +
+            "everything under `heading` (subsections included) for `content`.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              path: { type: "string", description: "Vault-relative note path" },
+              mode: {
+                type: "string",
+                enum: ["append", "prepend", "find_replace", "replace_section"],
+              },
+              content: { type: "string", description: "Text for append/prepend/replace_section" },
+              find: { type: "string", description: "Text to find (find_replace)" },
+              replace: { type: "string", description: "Replacement text (find_replace)" },
+              heading: { type: "string", description: "Exact heading text (replace_section)" },
+            },
+            required: ["path", "mode"],
+          },
+        },
+        {
+          name: "delete_note",
+          description:
+            "Move a note to the vault's .trash folder. NEVER a permanent delete — " +
+            "the note can be restored from .trash. Folders are refused.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              path: { type: "string", description: "Vault-relative note path" },
+            },
+            required: ["path"],
+          },
+        },
       ],
     };
   });
@@ -139,13 +224,48 @@ export function createServer(config: Config): Server {
         }
 
         case "read_note": {
-          // Be forgiving at the boundary: a model that saw "alpha" without
-          // .md in a listing should not fail. Cheap normalization here beats
-          // a failed call round-trip.
-          let notePath = requireString(args, "path");
-          if (!notePath.endsWith(".md")) notePath += ".md";
-          const content = await vault.readNote(notePath);
+          const content = await vault.readNote(requireString(args, "path"));
           return text(content);
+        }
+
+        case "search_notes": {
+          const query = requireString(args, "query");
+          const { matches, total, truncated } = await vault.searchNotes(query, {
+            regex: args?.regex === true,
+            folder: typeof args?.folder === "string" ? args.folder : undefined,
+          });
+          if (total === 0) return text(`No matches for '${query}'.`);
+          const lines = matches.map((m) => `${m.path}:${m.line}: ${m.text}`);
+          if (truncated) {
+            lines.push(`(showing ${matches.length} of ${total} matches — narrow the query or folder)`);
+          }
+          return text(lines.join("\n"));
+        }
+
+        case "get_frontmatter": {
+          const data = await vault.getFrontmatter(requireString(args, "path"));
+          return text(JSON.stringify(data, null, 2));
+        }
+
+        case "create_note": {
+          const rel = await vault.createNote(requireString(args, "path"), requireString(args, "content"), {
+            overwrite: args?.overwrite === true,
+            frontmatter:
+              args?.frontmatter && typeof args.frontmatter === "object" && !Array.isArray(args.frontmatter)
+                ? (args.frontmatter as Record<string, unknown>)
+                : undefined,
+          });
+          return text(`Created ${rel}`);
+        }
+
+        case "edit_note": {
+          const result = await vault.editNote(requireString(args, "path"), toEditRequest(args));
+          return text(result);
+        }
+
+        case "delete_note": {
+          const trashPath = await vault.deleteNote(requireString(args, "path"));
+          return text(`Moved to ${trashPath} (recoverable from the vault's .trash folder)`);
         }
 
         default:
@@ -183,4 +303,26 @@ function requireString(args: Record<string, unknown> | undefined, key: string): 
     throw new VaultPathError(`Missing required string argument '${key}'`);
   }
   return value;
+}
+
+/**
+ * Map the free-form JSON arguments onto the EditRequest union. Each mode's
+ * required fields are enforced here with tool-error complaints — the model
+ * gets told exactly what's missing, per mode, instead of a generic failure.
+ */
+function toEditRequest(args: Record<string, unknown> | undefined): EditRequest {
+  const mode = requireString(args, "mode");
+  switch (mode) {
+    case "append":
+    case "prepend":
+      return { mode, content: requireString(args, "content") };
+    case "find_replace":
+      return { mode, find: requireString(args, "find"), replace: requireString(args, "replace") };
+    case "replace_section":
+      return { mode, heading: requireString(args, "heading"), content: requireString(args, "content") };
+    default:
+      throw new VaultPathError(
+        `Unknown mode '${mode}'. Valid modes: append, prepend, find_replace, replace_section`,
+      );
+  }
 }

@@ -156,6 +156,65 @@ describe("MCP handshake and tools", () => {
     expect(res.result.content[0].text).toMatch(/escapes the vault/);
   });
 
+  it("searches notes and returns path:line references", async () => {
+    const { promise } = request("tools/call", {
+      name: "search_notes",
+      arguments: { query: "alpha" },
+    });
+    const res = await promise;
+
+    expect(res.result.isError).toBeUndefined();
+    expect(res.result.content[0].text).toMatch(/projects\/alpha\.md:1: # Alpha/);
+  });
+
+  it("creates a note with frontmatter, then reads it back", async () => {
+    const create = request("tools/call", {
+      name: "create_note",
+      arguments: {
+        path: "research/new-note",
+        content: "# New\n\nbody",
+        frontmatter: { tags: ["wip"] },
+      },
+    });
+    expect((await create.promise).result.content[0].text).toBe("Created research/new-note.md");
+
+    const read = request("tools/call", { name: "read_note", arguments: { path: "research/new-note" } });
+    expect((await read.promise).result.content[0].text).toContain("# New");
+
+    const fm = request("tools/call", { name: "get_frontmatter", arguments: { path: "research/new-note" } });
+    expect(JSON.parse((await fm.promise).result.content[0].text)).toEqual({ tags: ["wip"] });
+  });
+
+  it("refuses to silently overwrite on create — a tool error the model can act on", async () => {
+    const { promise } = request("tools/call", {
+      name: "create_note",
+      arguments: { path: "inbox.md", content: "clobber" },
+    });
+    const res = await promise;
+
+    expect(res.result.isError).toBe(true);
+    expect(res.result.content[0].text).toMatch(/already exists/);
+  });
+
+  it("edits a note in place (append) and the change is visible to read_note", async () => {
+    const edit = request("tools/call", {
+      name: "edit_note",
+      arguments: { path: "projects/alpha", mode: "append", content: "appended line" },
+    });
+    expect((await edit.promise).result.isError).toBeUndefined();
+
+    const read = request("tools/call", { name: "read_note", arguments: { path: "projects/alpha.md" } });
+    expect((await read.promise).result.content[0].text).toContain("appended line");
+  });
+
+  it("moves notes to .trash on delete — and the model finds out if it reads again", async () => {
+    const del = request("tools/call", { name: "delete_note", arguments: { path: "inbox.md" } });
+    expect((await del.promise).result.content[0].text).toMatch(/\.trash\/inbox\.md/);
+
+    const read = request("tools/call", { name: "read_note", arguments: { path: "inbox.md" } });
+    expect((await read.promise).result.isError).toBe(true);
+  });
+
   it("rejects unknown tools as a protocol error", async () => {
     const { promise } = request("tools/call", { name: "does_not_exist", arguments: {} });
     const res = await promise;
