@@ -8,11 +8,11 @@ Written **to learn how MCP works internally**, and commented like it: the code d
 
 ## What you can ask Claude
 
-> *"How many notes are in my vault?"*
-> *"Find every note mentioning compound interest and summarize them."*
-> *"Create `Finanțe/glossary.md` with these terms, tagged `#finance`."*
-> *"Rename my daily note to `2026-09-07` — don't break any links."*
-> *"Which notes link to my reading list?"*
+> *"How many notes are in my vault, and where are the newest ones?"*
+> *"Find every note that mentions 'spaced repetition' and summarize the key ideas."*
+> *"Create `research/glossary.md` with these ten terms and tag it `#glossary`."*
+> *"Rename `daily/2026-09-06.md` to `journal/2026-09-06.md` — don't break any links."*
+> *"Which notes link to my reading list? Show the exact lines."*
 
 ## The 11 tools
 

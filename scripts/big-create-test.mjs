@@ -29,7 +29,7 @@ const frames = [
     params: {
       name: "create_note",
       arguments: {
-        path: "Finanțe/size-probe.md",
+        path: "research/size-probe.md",
         frontmatter: { tags: ["probe"], sursă: "script", status: "draft" },
         content: `# Size probe (${size} chars)\n\n${content}`,
       },
